@@ -1,8 +1,10 @@
 # 苍穹工程初始化助手 (BOS Project Initialization Assistant)
 
+[English Version](README_en.md)
+
 这是一个为金蝶苍穹平台开发者设计的 IntelliJ IDEA(最低版本2025.2.4) 插件，旨在简化苍穹项目的初始化流程。通过图形化界面配置，可以一键批量拉取多个 Git 仓库，并自动完成苍穹项目所需的各项配置工作。
 
-![](help.png)
+![](src/main/resources/image/help.png)
 
 ## 功能特性
 
@@ -58,6 +60,8 @@
 │   │   ├── MessageBundle.properties       # 默认语言包（中文）
 │   │   ├── MessageBundle_en_US.properties # 英文语言包
 │   │   └── MessageBundle_zh_CN.properties # 中文语言包
+│   ├── image/                             # 图片资源
+│   │   └── help.png                       # 帮助图片
 │   └── META-INF/
 │       └── plugin.xml                     # 插件配置文件
 │

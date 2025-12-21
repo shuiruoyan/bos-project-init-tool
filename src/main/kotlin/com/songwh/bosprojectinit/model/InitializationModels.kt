@@ -30,7 +30,8 @@ data class ModuleInfo(
     val moduleName: String,   // 模块目录名
     val moduleDir: File,      // 模块文件夹对象
     val buildGradle: File,    // build.gradle 文件对象
-    val relativePath: String  // 相对于 projects 目录的路径 (如 repo/sub/module)
+    val relativePath: String, // 相对于 projects 目录的路径 (如 repo/sub/module)
+    val version: String? = null // 模块版本号
 )
 
 /**

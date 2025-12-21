@@ -3,12 +3,109 @@ package com.songwh.bosprojectinit.logic.steps.impl
 import com.songwh.bosprojectinit.model.ModuleInfo
 import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
+import java.nio.file.Files
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 class SettingsStepTest {
 
     private val step = SettingsStep(AtomicBoolean(false), mutableMapOf()) { }
+
+    @Test
+    fun testCollectModuleInfosFiltering() {
+        val tempDir = Files.createTempDirectory("projects").toFile()
+        try {
+            // projects/
+            //   repo1/
+            //     moduleA/build.gradle
+            //   repo2/
+            //     moduleB/build.gradle
+            //   extraRepo/
+            //     moduleC/build.gradle
+            
+            val repo1Dir = File(tempDir, "repo1/moduleA").apply { mkdirs() }
+            File(repo1Dir, "build.gradle").writeText("version = '1.0'")
+            
+            val repo2Dir = File(tempDir, "repo2/moduleB").apply { mkdirs() }
+            File(repo2Dir, "build.gradle").writeText("version = '2.0'")
+            
+            val extraRepoDir = File(tempDir, "extraRepo/moduleC").apply { mkdirs() }
+            File(extraRepoDir, "build.gradle").writeText("version = '3.0'")
+            
+            val results = step.collectModuleInfos(tempDir)
+            
+            assertEquals(3, results.size, "Should collect all 3 modules")
+            assertTrue(results.any { it.repoName == "repo1" && it.moduleName == "moduleA" })
+            assertTrue(results.any { it.repoName == "repo2" && it.moduleName == "moduleB" })
+            assertTrue(results.any { it.repoName == "extraRepo" && it.moduleName == "moduleC" })
+        } finally {
+            tempDir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testCollectModuleInfosVersionExtraction() {
+        val tempDir = Files.createTempDirectory("version_test").toFile()
+        try {
+            val repoDir = File(tempDir, "my-repo/sub-module").apply { mkdirs() }
+            
+            // 测试双引号
+            File(repoDir, "build.gradle").writeText("version = \"1.2.3\"")
+            var results = step.collectModuleInfos(tempDir)
+            assertEquals("1.2.3", results.first().version)
+
+            // 测试单引号
+            File(repoDir, "build.gradle").writeText("version = '2.3.4'")
+            results = step.collectModuleInfos(tempDir)
+            assertEquals("2.3.4", results.first().version)
+
+            // 测试空格
+            File(repoDir, "build.gradle").writeText("version  =  '3.4.5'  ")
+            results = step.collectModuleInfos(tempDir)
+            assertEquals("3.4.5", results.first().version)
+            
+            // 测试无版本号
+            File(repoDir, "build.gradle").writeText("dependencies { }")
+            results = step.collectModuleInfos(tempDir)
+            assertEquals(null, results.first().version)
+        } finally {
+            tempDir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testCollectModuleInfosDeepModules() {
+        val tempDir = Files.createTempDirectory("deep_test").toFile()
+        try {
+            // projects/repo/a/b/c/build.gradle
+            val deepDir = File(tempDir, "my-repo/a/b/c").apply { mkdirs() }
+            File(deepDir, "build.gradle").writeText("version = '1.0'")
+            
+            val results = step.collectModuleInfos(tempDir)
+            assertEquals(1, results.size)
+            assertEquals("my-repo", results.first().repoName)
+            assertEquals("c", results.first().moduleName)
+            assertEquals("my-repo/a/b/c", results.first().relativePath)
+        } finally {
+            tempDir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testRepoNameExtraction() {
+        // 虽然这个逻辑在 execute 内部，但我们可以直接测试这个转换逻辑
+        val urls = listOf(
+            "https://github.com/user/repo1.git",
+            "git@github.com:user/repo2.git",
+            "http://internal.com/group/subgroup/repo3.git"
+        )
+        val allowedRepos = urls.map { url ->
+            url.substringAfterLast("/").substringBefore(".git")
+        }.toSet()
+        
+        assertEquals(setOf("repo1", "repo2", "repo3"), allowedRepos)
+    }
 
     @Test
     fun testBuildSettingsGradleContent() {

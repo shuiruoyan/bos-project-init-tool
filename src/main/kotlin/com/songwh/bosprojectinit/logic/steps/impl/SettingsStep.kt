@@ -22,7 +22,7 @@ class SettingsStep(
 
         return runCatching {
             val projectsDir = File(context.rootPath, "projects")
-            
+
             // 扫描所有带有 build.gradle 的子目录，收集模块元数据
             context.moduleInfos = collectModuleInfos(projectsDir)
 
@@ -48,7 +48,7 @@ class SettingsStep(
      * 递归扫描指定目录下的所有子模块
      * 识别标准：包含 build.gradle 文件的目录
      */
-    private fun collectModuleInfos(projectsDir: File): List<ModuleInfo> {
+    internal fun collectModuleInfos(projectsDir: File): List<ModuleInfo> {
         if (!projectsDir.exists()) return emptyList()
 
         return projectsDir.walkTopDown()
@@ -60,8 +60,22 @@ class SettingsStep(
                 if (parts.isEmpty()) return@mapNotNull null
 
                 val repoName = parts.first() // 第一级目录通常是仓库名
+                
                 val moduleName = file.parentFile.name // 文件夹名作为模块名
-                ModuleInfo(repoName, moduleName, file.parentFile, file, relativePath)
+                
+                // 尝试从 build.gradle 中提取 version
+                var version: String? = null
+                try {
+                    val content = file.readText()
+                    val versionMatch = """version\s*=\s*['"]([^'"]+)['"]""".toRegex().find(content)
+                    if (versionMatch != null) {
+                        version = versionMatch.groupValues[1]
+                    }
+                } catch (e: Exception) {
+                    // 忽略读取错误
+                }
+
+                ModuleInfo(repoName, moduleName, file.parentFile, file, relativePath, version)
             }
             .toList()
     }

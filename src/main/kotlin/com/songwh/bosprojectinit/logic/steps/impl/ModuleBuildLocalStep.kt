@@ -26,8 +26,16 @@ class ModuleBuildLocalStep(
         return runCatching {
             context.onProgress(context.calculateTotalProgress(stepIndex, totalSteps, 0f), MessageBundle.message("status.modulebuildlocal"))
             
-            // 执行批量转换逻辑
-            createModuleBuildLocalFiles(context.rootPath, context.moduleInfos, context, stepIndex, totalSteps)
+            // 从 URL 列表中提取所有有效的仓库名称，用于过滤需要处理的子模块
+            val allowedRepos = context.urls.map { url ->
+                url.substringAfterLast("/").substringBefore(".git")
+            }.toSet()
+
+            // 过滤出属于配置仓库的模块进行 build_local.gradle 构建
+            val filteredModules = context.moduleInfos.filter { allowedRepos.contains(it.repoName) }
+
+            // 执行批量转换逻辑，传入过滤后的模块列表作为处理对象，但替换依赖时仍可参考所有模块
+            createModuleBuildLocalFiles(context.rootPath, filteredModules, context.moduleInfos, context, stepIndex, totalSteps)
             
             context.onProgress(context.calculateTotalProgress(stepIndex, totalSteps, 1f), MessageBundle.message("status.modulebuildlocal"))
             StepResult(true)
@@ -47,7 +55,8 @@ class ModuleBuildLocalStep(
      */
     private suspend fun createModuleBuildLocalFiles(
         rootPath: String,
-        moduleInfos: List<ModuleInfo>,
+        targetModules: List<ModuleInfo>,
+        allModules: List<ModuleInfo>,
         context: StepExecutionContext,
         stepIndex: Int,
         totalSteps: Int
@@ -59,8 +68,8 @@ class ModuleBuildLocalStep(
             0
         )
 
-        val totalModules = moduleInfos.size
-        moduleInfos.forEachIndexed { index, info ->
+        val totalModules = targetModules.size
+        targetModules.forEachIndexed { index, info ->
             if (isCancelled.get()) return@forEachIndexed
 
             val progress = (index.toFloat() / totalModules)
@@ -69,7 +78,7 @@ class ModuleBuildLocalStep(
                 MessageBundle.message("log.modulebuildlocal.progress", index + 1, totalModules)
             )
 
-            processModule(info, moduleInfos)
+            processModule(info, allModules, rootPath)
         }
 
         updateCustomLog(
@@ -83,7 +92,7 @@ class ModuleBuildLocalStep(
     /**
      * 处理单个模块的依赖转换
      */
-    private fun processModule(info: ModuleInfo, allModules: List<ModuleInfo>) {
+    private fun processModule(info: ModuleInfo, allModules: List<ModuleInfo>, rootPath: String) {
         val buildGradle = info.buildGradle
         val buildLocalGradle = File(buildGradle.parentFile, "build_local.gradle")
 
@@ -91,7 +100,20 @@ class ModuleBuildLocalStep(
 
         val originalContent = buildGradle.readText()
         // 核心逻辑：分析内容并替换
-        val modifiedContent = transformDependencies(originalContent, allModules)
+        var modifiedContent = transformDependencies(originalContent, allModules)
+
+        // 追加 build-suffix.gradle.template 内容
+        val suffixTemplate = File(rootPath, "build-suffix.gradle.template")
+        if (suffixTemplate.exists()) {
+            val suffixContent = suffixTemplate.readText()
+            if (suffixContent.isNotBlank()) {
+                if (!modifiedContent.endsWith("\n")) {
+                    modifiedContent += "\n"
+                }
+                modifiedContent += "\n// --- Append from build-suffix.gradle.template ---\n"
+                modifiedContent += suffixContent
+            }
+        }
 
         buildLocalGradle.writeText(modifiedContent)
     }
@@ -103,16 +125,18 @@ class ModuleBuildLocalStep(
     internal fun transformDependencies(content: String, allModules: List<ModuleInfo>): String {
         val lines = content.lines()
         val result = mutableListOf<String>()
-        
-        // 按模块名长度降序排序，优先匹配长的
-        val sortedModules = allModules.sortedByDescending { it.moduleName.length }
-        
-        // 正则表达式：支持多种配置前缀 (compile, implementation等)
-        // 专门匹配 fileTree 格式，例如: implementation fileTree(dir: 'libs', include: ['swc-hcdm-business*.jar'])
-        // 排除掉已经注释掉的行 (以 // 开头)
-        // 改进正则：捕获 include 中的内容，支持更复杂的匹配
-        val jarPattern = """^\s*(compile|implementation|api|runtimeOnly|testImplementation|testApi)\s+fileTree\s*\(.*include\s*:\s*['"\[]\s*([^'"\]]+\.jar)\s*['"\]].*\)""".toRegex()
-        
+
+        // 预处理模块匹配列表，包含 模块名-版本
+        val moduleMatchers = allModules.map { module ->
+            val fullName = if (module.version != null) "${module.moduleName}-${module.version}" else module.moduleName
+            val projectPath = ":${module.repoName}.${module.moduleName}"
+            fullName to projectPath
+        }.sortedByDescending { it.first.length }
+
+        // 正则表达式：匹配 fileTree 格式，支持多种配置前缀
+        // 例如: implementation fileTree(dir: 'libs', include: ['swc-hcdm-business-1.0*.jar'])
+        val jarPattern = """^\s*(compile|implementation|api|runtimeOnly|testImplementation|testApi)\s+fileTree\s*\(.*include\s*:\s*['"\[]\s*([^'"\]]+)\s*['"\]].*\)""".toRegex()
+
         for (line in lines) {
             // 如果该行已经被注释掉，则跳过替换
             if (line.trim().startsWith("//")) {
@@ -120,37 +144,56 @@ class ModuleBuildLocalStep(
                 continue
             }
 
-            var transformedLine = line
             val matchResult = jarPattern.find(line)
-            
             if (matchResult != null) {
                 val config = matchResult.groupValues[1] // 配置关键字
-                val jarInclude = matchResult.groupValues[2] // JAR包含模式，如 swc-hcdm-business*.jar
+                val jarInclude = matchResult.groupValues[2] // JAR包含模式，如 swc-hcdm-business-1.0*.jar
+
+                if (!jarInclude.endsWith(".jar") && !jarInclude.contains("*")) {
+                    result.add(line)
+                    continue
+                }
+
+                // 查找所有匹配 of the module
+                val matchedProjectPaths = mutableListOf<String>()
                 
-                // 查找匹配的模块
-                // 规则：jarInclude 必须以模块名开头，且后面紧跟着 '-' 或 数字 或 '*'
-                val matchingModule = sortedModules.find { module ->
-                    val moduleName = module.moduleName
-                    if (jarInclude.startsWith(moduleName)) {
-                        val remainder = jarInclude.substring(moduleName.length)
-                        // 剩余部分必须以 '-' 或 数字 或 '*' 开头
-                        remainder.startsWith("-") || remainder.startsWith("*") || (remainder.isNotEmpty() && remainder[0].isDigit())
-                    } else {
-                        false
+                // Remove .jar suffix if present, then remove trailing *
+                var baseMatchName = jarInclude
+                if (baseMatchName.endsWith(".jar")) {
+                    baseMatchName = baseMatchName.substring(0, baseMatchName.length - 4)
+                }
+                baseMatchName = baseMatchName.removeSuffix("*")
+
+                if (baseMatchName.isEmpty() || baseMatchName == "*") {
+                    result.add(line)
+                    continue
+                }
+
+                for ((fullName, projectPath) in moduleMatchers) {
+                    // Case 1: Exact match or include pattern is longer (e.g., contains -SNAPSHOT)
+                    if (baseMatchName.startsWith(fullName)) {
+                        matchedProjectPaths.add(projectPath)
+                    }
+                    // Case 2: Wildcard match where module name starts with the prefix
+                    // We only do this if it's a prefix-style wildcard (e.g., mod-*)
+                    if (jarInclude.contains("*") && fullName.startsWith(baseMatchName)) {
+                        matchedProjectPaths.add(projectPath)
                     }
                 }
-                
-                if (matchingModule != null) {
-                    val projectPath = ":${matchingModule.repoName}.${matchingModule.moduleName}"
+
+                if (matchedProjectPaths.isNotEmpty()) {
                     val indent = line.takeWhile { it.isWhitespace() }
-                    // 注释掉原行，追加新的 project 引用，保持原始缩进
-                    transformedLine = "$indent//@Tool ${line.trim()}\n$indent$config project('$projectPath')"
+                    result.add("$indent//@Replaced ${line.trim()}")
+                    matchedProjectPaths.distinct().forEach { path ->
+                        result.add("$indent$config project('$path')")
+                    }
+                    continue
                 }
             }
-            
-            result.add(transformedLine)
+
+            result.add(line)
         }
-        
+
         return result.joinToString("\n")
     }
 
