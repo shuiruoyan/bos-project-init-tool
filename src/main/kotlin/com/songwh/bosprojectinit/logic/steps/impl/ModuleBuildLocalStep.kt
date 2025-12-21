@@ -26,8 +26,16 @@ class ModuleBuildLocalStep(
         return runCatching {
             context.onProgress(context.calculateTotalProgress(stepIndex, totalSteps, 0f), MessageBundle.message("status.modulebuildlocal"))
             
-            // 执行批量转换逻辑
-            createModuleBuildLocalFiles(context.rootPath, context.moduleInfos, context, stepIndex, totalSteps)
+            // 从 URL 列表中提取所有有效的仓库名称，用于过滤需要处理的子模块
+            val allowedRepos = context.urls.map { url ->
+                url.substringAfterLast("/").substringBefore(".git")
+            }.toSet()
+
+            // 过滤出属于配置仓库的模块进行 build_local.gradle 构建
+            val filteredModules = context.moduleInfos.filter { allowedRepos.contains(it.repoName) }
+
+            // 执行批量转换逻辑，传入过滤后的模块列表作为处理对象，但替换依赖时仍可参考所有模块
+            createModuleBuildLocalFiles(context.rootPath, filteredModules, context.moduleInfos, context, stepIndex, totalSteps)
             
             context.onProgress(context.calculateTotalProgress(stepIndex, totalSteps, 1f), MessageBundle.message("status.modulebuildlocal"))
             StepResult(true)
@@ -47,7 +55,8 @@ class ModuleBuildLocalStep(
      */
     private suspend fun createModuleBuildLocalFiles(
         rootPath: String,
-        moduleInfos: List<ModuleInfo>,
+        targetModules: List<ModuleInfo>,
+        allModules: List<ModuleInfo>,
         context: StepExecutionContext,
         stepIndex: Int,
         totalSteps: Int
@@ -59,8 +68,8 @@ class ModuleBuildLocalStep(
             0
         )
 
-        val totalModules = moduleInfos.size
-        moduleInfos.forEachIndexed { index, info ->
+        val totalModules = targetModules.size
+        targetModules.forEachIndexed { index, info ->
             if (isCancelled.get()) return@forEachIndexed
 
             val progress = (index.toFloat() / totalModules)
@@ -69,7 +78,7 @@ class ModuleBuildLocalStep(
                 MessageBundle.message("log.modulebuildlocal.progress", index + 1, totalModules)
             )
 
-            processModule(info, moduleInfos)
+            processModule(info, allModules, rootPath)
         }
 
         updateCustomLog(
@@ -83,7 +92,7 @@ class ModuleBuildLocalStep(
     /**
      * 处理单个模块的依赖转换
      */
-    private fun processModule(info: ModuleInfo, allModules: List<ModuleInfo>) {
+    private fun processModule(info: ModuleInfo, allModules: List<ModuleInfo>, rootPath: String) {
         val buildGradle = info.buildGradle
         val buildLocalGradle = File(buildGradle.parentFile, "build_local.gradle")
 
@@ -91,7 +100,20 @@ class ModuleBuildLocalStep(
 
         val originalContent = buildGradle.readText()
         // 核心逻辑：分析内容并替换
-        val modifiedContent = transformDependencies(originalContent, allModules)
+        var modifiedContent = transformDependencies(originalContent, allModules)
+
+        // 追加 build-suffix.gradle.template 内容
+        val suffixTemplate = File(rootPath, "build-suffix.gradle.template")
+        if (suffixTemplate.exists()) {
+            val suffixContent = suffixTemplate.readText()
+            if (suffixContent.isNotBlank()) {
+                if (!modifiedContent.endsWith("\n")) {
+                    modifiedContent += "\n"
+                }
+                modifiedContent += "\n// --- Append from build-suffix.gradle.template ---\n"
+                modifiedContent += suffixContent
+            }
+        }
 
         buildLocalGradle.writeText(modifiedContent)
     }

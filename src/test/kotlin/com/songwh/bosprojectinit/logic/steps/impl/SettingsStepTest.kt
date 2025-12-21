@@ -33,13 +33,12 @@ class SettingsStepTest {
             val extraRepoDir = File(tempDir, "extraRepo/moduleC").apply { mkdirs() }
             File(extraRepoDir, "build.gradle").writeText("version = '3.0'")
             
-            val allowedRepos = setOf("repo1", "repo2")
-            val results = step.collectModuleInfos(tempDir, allowedRepos)
+            val results = step.collectModuleInfos(tempDir)
             
-            assertEquals(2, results.size, "Should only collect 2 modules")
+            assertEquals(3, results.size, "Should collect all 3 modules")
             assertTrue(results.any { it.repoName == "repo1" && it.moduleName == "moduleA" })
             assertTrue(results.any { it.repoName == "repo2" && it.moduleName == "moduleB" })
-            assertTrue(results.none { it.repoName == "extraRepo" }, "Should not collect from extraRepo")
+            assertTrue(results.any { it.repoName == "extraRepo" && it.moduleName == "moduleC" })
         } finally {
             tempDir.deleteRecursively()
         }
@@ -53,22 +52,22 @@ class SettingsStepTest {
             
             // 测试双引号
             File(repoDir, "build.gradle").writeText("version = \"1.2.3\"")
-            var results = step.collectModuleInfos(tempDir, setOf("my-repo"))
+            var results = step.collectModuleInfos(tempDir)
             assertEquals("1.2.3", results.first().version)
 
             // 测试单引号
             File(repoDir, "build.gradle").writeText("version = '2.3.4'")
-            results = step.collectModuleInfos(tempDir, setOf("my-repo"))
+            results = step.collectModuleInfos(tempDir)
             assertEquals("2.3.4", results.first().version)
 
             // 测试空格
             File(repoDir, "build.gradle").writeText("version  =  '3.4.5'  ")
-            results = step.collectModuleInfos(tempDir, setOf("my-repo"))
+            results = step.collectModuleInfos(tempDir)
             assertEquals("3.4.5", results.first().version)
             
             // 测试无版本号
             File(repoDir, "build.gradle").writeText("dependencies { }")
-            results = step.collectModuleInfos(tempDir, setOf("my-repo"))
+            results = step.collectModuleInfos(tempDir)
             assertEquals(null, results.first().version)
         } finally {
             tempDir.deleteRecursively()
@@ -83,7 +82,7 @@ class SettingsStepTest {
             val deepDir = File(tempDir, "my-repo/a/b/c").apply { mkdirs() }
             File(deepDir, "build.gradle").writeText("version = '1.0'")
             
-            val results = step.collectModuleInfos(tempDir, setOf("my-repo"))
+            val results = step.collectModuleInfos(tempDir)
             assertEquals(1, results.size)
             assertEquals("my-repo", results.first().repoName)
             assertEquals("c", results.first().moduleName)

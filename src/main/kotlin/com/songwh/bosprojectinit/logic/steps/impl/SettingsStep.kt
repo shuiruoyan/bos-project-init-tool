@@ -23,13 +23,8 @@ class SettingsStep(
         return runCatching {
             val projectsDir = File(context.rootPath, "projects")
 
-            // 从 URL 列表中提取所有有效的仓库名称
-            val allowedRepos = context.urls.map { url ->
-                url.substringAfterLast("/").substringBefore(".git")
-            }.toSet()
-            
-            // 扫描所有带有 build.gradle 的子目录，收集模块元数据，仅限配置的仓库
-            context.moduleInfos = collectModuleInfos(projectsDir, allowedRepos)
+            // 扫描所有带有 build.gradle 的子目录，收集模块元数据
+            context.moduleInfos = collectModuleInfos(projectsDir)
 
             context.onProgress(context.calculateTotalProgress(stepIndex, totalSteps, 0f), MessageBundle.message("status.settings"))
             
@@ -51,9 +46,9 @@ class SettingsStep(
 
     /**
      * 递归扫描指定目录下的所有子模块
-     * 识别标准：包含 build.gradle 文件的目录，且属于指定的仓库列表
+     * 识别标准：包含 build.gradle 文件的目录
      */
-    internal fun collectModuleInfos(projectsDir: File, allowedRepos: Set<String>): List<ModuleInfo> {
+    internal fun collectModuleInfos(projectsDir: File): List<ModuleInfo> {
         if (!projectsDir.exists()) return emptyList()
 
         return projectsDir.walkTopDown()
@@ -66,11 +61,6 @@ class SettingsStep(
 
                 val repoName = parts.first() // 第一级目录通常是仓库名
                 
-                // 核心逻辑：只处理在仓库列表配置中的仓库对应目录下面的 build.gradle 文件
-                if (!allowedRepos.contains(repoName)) {
-                    return@mapNotNull null
-                }
-
                 val moduleName = file.parentFile.name // 文件夹名作为模块名
                 
                 // 尝试从 build.gradle 中提取 version

@@ -85,6 +85,21 @@ class BuildLocalStep(
 
             // 写入文件
             rootBuildLocal.writeText(result.toString())
+
+            // 追加 build-suffix.gradle.template 内容
+            val suffixTemplate = File(rootPath, "build-suffix.gradle.template")
+            if (suffixTemplate.exists()) {
+                val suffixContent = suffixTemplate.readText()
+                if (suffixContent.isNotBlank()) {
+                    val appendContent = StringBuilder()
+                    if (!result.endsWith("\n")) {
+                        appendContent.append("\n")
+                    }
+                    appendContent.append("\n// --- Append from build-suffix.gradle.template ---\n")
+                    appendContent.append(suffixContent)
+                    rootBuildLocal.appendText(appendContent.toString())
+                }
+            }
         }.onFailure { e ->
             updateCustomLog(
                 "__build_local__",
