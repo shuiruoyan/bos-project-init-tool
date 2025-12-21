@@ -1,0 +1,19 @@
+rootProject.name = '{{ROOT_NAME}}'
+
+def baseDir = '{{BASE_DIR}}'
+
+{{INCLUDES}}
+
+{{PROJECT_DIRS}}
+
+def myBuildFileName="build_local.gradle"
+
+rootProject.children.each { project ->
+    println "project.path = " + project.path
+    project.buildFileName = "${myBuildFileName}"
+
+    assert project.projectDir.isDirectory()
+    assert project.buildFile.isFile()
+}
+
+rootProject.buildFileName = "${myBuildFileName}"

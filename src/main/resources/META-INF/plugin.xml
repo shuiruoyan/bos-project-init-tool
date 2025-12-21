@@ -1,0 +1,44 @@
+<!-- Plugin Configuration File: https://plugins.jetbrains.com/docs/intellij/plugin-configuration-file.html -->
+<idea-plugin>
+    <!-- Unique identifier of the plugin. It should be FQN, cannot be changed between the plugin versions. -->
+    <id>com.songwh.bos-project-init</id>
+
+    <!-- Public plugin name should be written in Title Case.
+         Guidelines: https://plugins.jetbrains.com/docs/marketplace/best-practices-for-listing.html#plugin-name -->
+    <name>BOS Project Initialization Assistant</name>
+
+    <!-- A displayed Vendor name or Organization ID displayed on the Plugins Page. -->
+    <vendor url="https://songwh.top">songwh</vendor>
+
+    <!-- Description of the plugin displayed on the Plugin Page and IDE Plugin Manager.
+         Guidelines: https://plugins.jetbrains.com/docs/marketplace/best-practices-for-listing.html#plugin-description -->
+    <description><![CDATA[
+         Tools -> BOS Project Initialization Assistant<br>
+         version：<em>1.0.0</em><br>
+         author：songwh <em>(53643)</em><br>
+         </br>
+        </br>
+    ]]></description>
+
+    <!-- Product and plugin compatibility requirements.
+         Read more: https://plugins.jetbrains.com/docs/intellij/plugin-compatibility.html -->
+    <depends>com.intellij.modules.compose</depends>
+
+    <depends>com.intellij.modules.json</depends>
+    <depends>Git4Idea</depends>
+    <resource-bundle>messages.MessageBundle</resource-bundle>
+
+    <actions>
+        <action id="com.songwh.bosprojectinit.actions.ProjectInitAction"
+                class="com.songwh.bosprojectinit.actions.ProjectInitAction">
+            <add-to-group group-id="ToolsMenu" anchor="last"/>
+        </action>
+    </actions>
+
+    <!-- Extensions defined by the plugin.
+         Read more: https://plugins.jetbrains.com/docs/intellij/plugin-extension-points.html -->
+    <extensions defaultExtensionNs="com.intellij">
+        <toolWindow id="BosProjectInitTool" factoryClass="com.songwh.bosprojectinit.BosProjectInitToolFactory"
+                    icon="AllIcons.Toolwindows.ToolWindowPalette"/>
+    </extensions>
+</idea-plugin>
