@@ -26,11 +26,14 @@ jobs:
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
+      - name: Run Tests
+        run: ./gradlew test
+
       - name: Build Plugin
-        run: ./gradlew build
+        run: ./gradlew buildPlugin
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: plugin-artifact
-          path: build/distributions/*.zip
+          path: build/distributions/bos-project-init-tool-*.zip
