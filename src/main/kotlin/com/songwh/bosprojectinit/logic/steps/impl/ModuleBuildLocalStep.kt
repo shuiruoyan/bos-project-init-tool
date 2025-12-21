@@ -100,32 +100,51 @@ class ModuleBuildLocalStep(
      * 依赖转换算法
      * 逻辑：匹配 fileTree 引用中的 JAR 包名，如果在已下载的模块列表中找到同名模块，则替换为 project 引用。
      */
-    private fun transformDependencies(content: String, allModules: List<ModuleInfo>): String {
+    internal fun transformDependencies(content: String, allModules: List<ModuleInfo>): String {
         val lines = content.lines()
         val result = mutableListOf<String>()
         
+        // 按模块名长度降序排序，优先匹配长的
+        val sortedModules = allModules.sortedByDescending { it.moduleName.length }
+        
         // 正则表达式：支持多种配置前缀 (compile, implementation等)
         // 专门匹配 fileTree 格式，例如: implementation fileTree(dir: 'libs', include: ['swc-hcdm-business*.jar'])
-        val jarPattern = """(compile|implementation|api|runtimeOnly|testImplementation|testApi)\s+fileTree\s*\(.*include\s*:\s*['"\[]\s*([^'"\]]+)\.jar\s*['"\]].*\)""".toRegex()
+        // 排除掉已经注释掉的行 (以 // 开头)
+        // 改进正则：捕获 include 中的内容，支持更复杂的匹配
+        val jarPattern = """^\s*(compile|implementation|api|runtimeOnly|testImplementation|testApi)\s+fileTree\s*\(.*include\s*:\s*['"\[]\s*([^'"\]]+\.jar)\s*['"\]].*\)""".toRegex()
         
         for (line in lines) {
+            // 如果该行已经被注释掉，则跳过替换
+            if (line.trim().startsWith("//")) {
+                result.add(line)
+                continue
+            }
+
             var transformedLine = line
             val matchResult = jarPattern.find(line)
             
             if (matchResult != null) {
                 val config = matchResult.groupValues[1] // 配置关键字
-                val jarNamePattern = matchResult.groupValues[2] // JAR包名模式
-                val jarBaseName = jarNamePattern.replace("*", "") // 去掉通配符作为基础名
+                val jarInclude = matchResult.groupValues[2] // JAR包含模式，如 swc-hcdm-business*.jar
                 
-                // 在所有模块中寻找匹配项 (优先完全相等，再包含匹配)
-                val matchingModule = allModules.find { it.moduleName == jarBaseName } 
-                    ?: allModules.find { it.moduleName.contains(jarBaseName) }
+                // 查找匹配的模块
+                // 规则：jarInclude 必须以模块名开头，且后面紧跟着 '-' 或 数字 或 '*'
+                val matchingModule = sortedModules.find { module ->
+                    val moduleName = module.moduleName
+                    if (jarInclude.startsWith(moduleName)) {
+                        val remainder = jarInclude.substring(moduleName.length)
+                        // 剩余部分必须以 '-' 或 数字 或 '*' 开头
+                        remainder.startsWith("-") || remainder.startsWith("*") || (remainder.isNotEmpty() && remainder[0].isDigit())
+                    } else {
+                        false
+                    }
+                }
                 
                 if (matchingModule != null) {
                     val projectPath = ":${matchingModule.repoName}.${matchingModule.moduleName}"
                     val indent = line.takeWhile { it.isWhitespace() }
                     // 注释掉原行，追加新的 project 引用，保持原始缩进
-                    transformedLine = "$indent// $line\n$indent$config project('$projectPath')"
+                    transformedLine = "$indent//@Tool ${line.trim()}\n$indent$config project('$projectPath')"
                 }
             }
             

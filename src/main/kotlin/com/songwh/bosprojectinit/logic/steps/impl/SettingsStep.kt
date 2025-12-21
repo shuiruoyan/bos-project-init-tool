@@ -69,7 +69,7 @@ class SettingsStep(
     /**
      * 从 resources 中加载 settings.gradle 模板
      */
-    private fun loadSettingsTemplate(): String {
+    internal fun loadSettingsTemplate(): String {
         val stream = javaClass.classLoader.getResourceAsStream("templates/settings.gradle.template")
             ?: error("settings.gradle template not found in resources")
         return stream.bufferedReader(Charsets.UTF_8).use { it.readText() }
@@ -78,7 +78,7 @@ class SettingsStep(
     /**
      * 组装模板内容，替换占位符
      */
-    private fun buildSettingsGradleContent(rootPath: String, baseDir: String, moduleInfos: List<ModuleInfo>): String {
+    internal fun buildSettingsGradleContent(rootPath: String, baseDir: String, moduleInfos: List<ModuleInfo>): String {
         val template = loadSettingsTemplate()
         val rootName = File(rootPath).name
 

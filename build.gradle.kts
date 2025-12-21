@@ -8,7 +8,7 @@ plugins {
 }
 
 group = "com.songwh"
-version = "1.0.0"
+version = "1.0.1"
 
 repositories {
     mavenCentral()
@@ -30,6 +30,7 @@ dependencies {
         bundledPlugin("com.intellij.modules.json")
         bundledPlugin("Git4Idea")
     }
+    testImplementation(kotlin("test"))
 }
 
 intellijPlatform {

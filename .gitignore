@@ -2,3 +2,4 @@ out/
 .intellijPlatform/
 .kotlin/
 bos-project-init.iml
+.output.txt
