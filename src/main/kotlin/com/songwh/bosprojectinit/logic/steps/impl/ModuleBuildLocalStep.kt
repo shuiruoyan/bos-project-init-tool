@@ -103,16 +103,18 @@ class ModuleBuildLocalStep(
     internal fun transformDependencies(content: String, allModules: List<ModuleInfo>): String {
         val lines = content.lines()
         val result = mutableListOf<String>()
-        
-        // 按模块名长度降序排序，优先匹配长的
-        val sortedModules = allModules.sortedByDescending { it.moduleName.length }
-        
-        // 正则表达式：支持多种配置前缀 (compile, implementation等)
-        // 专门匹配 fileTree 格式，例如: implementation fileTree(dir: 'libs', include: ['swc-hcdm-business*.jar'])
-        // 排除掉已经注释掉的行 (以 // 开头)
-        // 改进正则：捕获 include 中的内容，支持更复杂的匹配
-        val jarPattern = """^\s*(compile|implementation|api|runtimeOnly|testImplementation|testApi)\s+fileTree\s*\(.*include\s*:\s*['"\[]\s*([^'"\]]+\.jar)\s*['"\]].*\)""".toRegex()
-        
+
+        // 预处理模块匹配列表，包含 模块名-版本
+        val moduleMatchers = allModules.map { module ->
+            val fullName = if (module.version != null) "${module.moduleName}-${module.version}" else module.moduleName
+            val projectPath = ":${module.repoName}.${module.moduleName}"
+            fullName to projectPath
+        }.sortedByDescending { it.first.length }
+
+        // 正则表达式：匹配 fileTree 格式，支持多种配置前缀
+        // 例如: implementation fileTree(dir: 'libs', include: ['swc-hcdm-business-1.0*.jar'])
+        val jarPattern = """^\s*(compile|implementation|api|runtimeOnly|testImplementation|testApi)\s+fileTree\s*\(.*include\s*:\s*['"\[]\s*([^'"\]]+)\s*['"\]].*\)""".toRegex()
+
         for (line in lines) {
             // 如果该行已经被注释掉，则跳过替换
             if (line.trim().startsWith("//")) {
@@ -120,37 +122,56 @@ class ModuleBuildLocalStep(
                 continue
             }
 
-            var transformedLine = line
             val matchResult = jarPattern.find(line)
-            
             if (matchResult != null) {
                 val config = matchResult.groupValues[1] // 配置关键字
-                val jarInclude = matchResult.groupValues[2] // JAR包含模式，如 swc-hcdm-business*.jar
+                val jarInclude = matchResult.groupValues[2] // JAR包含模式，如 swc-hcdm-business-1.0*.jar
+
+                if (!jarInclude.endsWith(".jar") && !jarInclude.contains("*")) {
+                    result.add(line)
+                    continue
+                }
+
+                // 查找所有匹配 of the module
+                val matchedProjectPaths = mutableListOf<String>()
                 
-                // 查找匹配的模块
-                // 规则：jarInclude 必须以模块名开头，且后面紧跟着 '-' 或 数字 或 '*'
-                val matchingModule = sortedModules.find { module ->
-                    val moduleName = module.moduleName
-                    if (jarInclude.startsWith(moduleName)) {
-                        val remainder = jarInclude.substring(moduleName.length)
-                        // 剩余部分必须以 '-' 或 数字 或 '*' 开头
-                        remainder.startsWith("-") || remainder.startsWith("*") || (remainder.isNotEmpty() && remainder[0].isDigit())
-                    } else {
-                        false
+                // Remove .jar suffix if present, then remove trailing *
+                var baseMatchName = jarInclude
+                if (baseMatchName.endsWith(".jar")) {
+                    baseMatchName = baseMatchName.substring(0, baseMatchName.length - 4)
+                }
+                baseMatchName = baseMatchName.removeSuffix("*")
+
+                if (baseMatchName.isEmpty() || baseMatchName == "*") {
+                    result.add(line)
+                    continue
+                }
+
+                for ((fullName, projectPath) in moduleMatchers) {
+                    // Case 1: Exact match or include pattern is longer (e.g., contains -SNAPSHOT)
+                    if (baseMatchName.startsWith(fullName)) {
+                        matchedProjectPaths.add(projectPath)
+                    }
+                    // Case 2: Wildcard match where module name starts with the prefix
+                    // We only do this if it's a prefix-style wildcard (e.g., mod-*)
+                    if (jarInclude.contains("*") && fullName.startsWith(baseMatchName)) {
+                        matchedProjectPaths.add(projectPath)
                     }
                 }
-                
-                if (matchingModule != null) {
-                    val projectPath = ":${matchingModule.repoName}.${matchingModule.moduleName}"
+
+                if (matchedProjectPaths.isNotEmpty()) {
                     val indent = line.takeWhile { it.isWhitespace() }
-                    // 注释掉原行，追加新的 project 引用，保持原始缩进
-                    transformedLine = "$indent//@Tool ${line.trim()}\n$indent$config project('$projectPath')"
+                    result.add("$indent//@Replaced ${line.trim()}")
+                    matchedProjectPaths.distinct().forEach { path ->
+                        result.add("$indent$config project('$path')")
+                    }
+                    continue
                 }
             }
-            
-            result.add(transformedLine)
+
+            result.add(line)
         }
-        
+
         return result.joinToString("\n")
     }
 

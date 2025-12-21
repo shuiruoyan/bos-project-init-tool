@@ -18,20 +18,15 @@ class ModuleBuildLocalStepTest {
     @Test
     fun testTransformDependencies() {
         val allModules = listOf(
-            ModuleInfo("hcdmpro", "swc-hcdm-business", File("."), File("."), "path")
+            ModuleInfo("hcdmpro", "swc-hcdm-business", File("."), File("."), "path", "1.0")
         )
 
         val input = """
             compile fileTree(dir: currentapp, include: 'swc-hcdm-business-1.0*.jar')
-            compile fileTree(dir: currentapp, include: 'swc-hcdm-business-*.jar')
-            compile fileTree(dir: currentapp, include: 'swc-hcdm-business-3.3333*.jar')
-            compile fileTree(dir: currentapp, include: 'swc-hcdm-business3.5*.jar')
-            compile fileTree(dir: currentapp, include: 'swc-hcdm-business*.jar')
+            compile fileTree(dir: currentapp, include: 'swc-hcdm-business-1.0-SNAPSHOT*.jar')
             
-            // Should NOT match
-            compile fileTree(dir: bos, include: '*.jar')
-            compile fileTree(dir: bos, include: 'swc-hcdm*.jar')
-            compile fileTree(dir: bos, include: '123*.jar')
+            // Should NOT match if version doesn't match
+            compile fileTree(dir: currentapp, include: 'swc-hcdm-business-2.0*.jar')
         """.trimIndent()
 
         val result = step.transformDependencies(input, allModules)
@@ -40,22 +35,24 @@ class ModuleBuildLocalStepTest {
         // 1. swc-hcdm-business-1.0*.jar -> Should match
         assertTrue(lines[1].contains("compile project(':hcdmpro.swc-hcdm-business')"), "Should match swc-hcdm-business-1.0*.jar")
         
-        // 2. swc-hcdm-business-*.jar -> Should match
-        assertTrue(lines[3].contains("compile project(':hcdmpro.swc-hcdm-business')"), "Should match swc-hcdm-business-*.jar")
+        // 2. swc-hcdm-business-1.0-SNAPSHOT*.jar -> Should match
+        assertTrue(lines[3].contains("compile project(':hcdmpro.swc-hcdm-business')"), "Should match swc-hcdm-business-1.0-SNAPSHOT*.jar")
         
-        // 4. swc-hcdm-business-3.3333*.jar -> Should match
-        assertTrue(lines[5].contains("compile project(':hcdmpro.swc-hcdm-business')"), "Should match swc-hcdm-business-3.3333*.jar")
-        
-        // 6. swc-hcdm-business3.5*.jar -> Should match
-        assertTrue(lines[7].contains("compile project(':hcdmpro.swc-hcdm-business')"), "Should match swc-hcdm-business3.5*.jar")
-        
-        // 8. swc-hcdm-business*.jar -> Should match
-        assertTrue(lines[9].contains("compile project(':hcdmpro.swc-hcdm-business')"), "Should match swc-hcdm-business*.jar")
+        // Non-matching case (version 2.0 vs 1.0)
+        assertTrue(lines.any { it.trim() == "compile fileTree(dir: currentapp, include: 'swc-hcdm-business-2.0*.jar')" }, "Should NOT match swc-hcdm-business-2.0*.jar")
+    }
 
-        // Non-matching cases
-        assertTrue(lines.any { it.trim() == "compile fileTree(dir: bos, include: '*.jar')" }, "Should NOT match *.jar")
-        assertTrue(lines.any { it.trim() == "compile fileTree(dir: bos, include: 'swc-hcdm*.jar')" }, "Should NOT match swc-hcdm*.jar (partial module name)")
-        assertTrue(lines.any { it.trim() == "compile fileTree(dir: bos, include: '123*.jar')" }, "Should NOT match 123*.jar")
+    @Test
+    fun testTransformDependenciesMultiMatch() {
+        // This test demonstrates matching multiple modules with a common prefix and wildcard
+        val input = "implementation fileTree(dir: 'libs', include: 'mod*.jar')"
+        val multiModules = listOf(
+            ModuleInfo("repo1", "mod", File("."), File("."), "path", "1.1"),
+            ModuleInfo("repo1", "mod-a", File("."), File("."), "path", "1.1")
+        )
+        val result = step.transformDependencies(input, multiModules)
+        assertTrue(result.contains("project(':repo1.mod')"), "Should contain repo1.mod")
+        assertTrue(result.contains("project(':repo1.mod-a')"), "Should contain repo1.mod-a")
     }
 
     @Test
@@ -72,5 +69,16 @@ class ModuleBuildLocalStepTest {
             "Should match the longest module name 'swc-hcdm-business-api', result was: $result")
         assertTrue(!result.contains("compile project(':hcdmpro.swc-hcdm-business')") || result.contains("swc-hcdm-business-api"),
             "Should NOT match 'swc-hcdm-business' if 'swc-hcdm-business-api' is available")
+    }
+
+    @Test
+    fun testTransformDependenciesIgnoreGenericJar() {
+        val allModules = listOf(
+            ModuleInfo("repo", "mod", File("."), File("."), "path", "1.0")
+        )
+        val input = "compile fileTree(dir: 'libs', include: '*.jar')"
+        val result = step.transformDependencies(input, allModules)
+        
+        assertEquals(input, result.trim(), "Should NOT replace *.jar")
     }
 }
