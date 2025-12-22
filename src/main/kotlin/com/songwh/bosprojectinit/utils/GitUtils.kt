@@ -7,17 +7,37 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
+import java.util.concurrent.ConcurrentHashMap
 
-data class GitCloneResult(val success: Boolean, val exitCode: Int)
+data class GitCloneResult(
+    val success: Boolean,
+    val exitCode: Int,
+    val errorMessage: String = "",
+    val errorType: GitErrorType = GitErrorType.UNKNOWN
+)
+
+enum class GitErrorType {
+    NETWORK_TIMEOUT,
+    PERMISSION_DENIED,
+    REPO_NOT_FOUND,
+    DISK_FULL,
+    AUTH_FAILED,
+    UNKNOWN
+}
 
 /**
  * 封装 Git 命令行操作的服务类
  * 支持进度解析、超时控制、任务取消以及彻底的进程树清理
+ * 支持并发多个克隆任务的独立进程管理
  */
 class GitUtils(private val isCancelled: AtomicBoolean) {
 
-    // 记录当前正在运行的 Git 进程引用，以便随时强制终止
-    private var currentProcess: Process? = null
+    // ✅ 改为 AtomicReference，确保线程安全的全局进程引用
+    private val currentProcess = AtomicReference<Process?>(null)
+
+    // ✅ 为每个克隆任务维护独立的进程引用，支持并发管理
+    private val taskProcesses = ConcurrentHashMap<String, AtomicReference<Process?>>()
 
     /**
      * 外部请求取消操作，标记状态并停止当前进程
@@ -25,14 +45,27 @@ class GitUtils(private val isCancelled: AtomicBoolean) {
     fun cancel() {
         isCancelled.set(true)
         stopCurrentProcess()
+        // 停止所有并发任务的进程
+        taskProcesses.forEach { (_, processRef) ->
+            stopProcess(processRef)
+        }
     }
 
     /**
-     * 彻底停止当前运行的 Git 及其派生的所有子进程
-     * 特别是针对 Windows 下 SSH 进程可能残留的问题
+     * 停止指定任务的 Git 进程
      */
-    fun stopCurrentProcess() {
-        val process = currentProcess ?: return
+    private fun stopProcessForTask(taskId: String) {
+        taskProcesses[taskId]?.let { processRef ->
+            stopProcess(processRef)
+            taskProcesses.remove(taskId)
+        }
+    }
+
+    /**
+     * 彻底停止进程树（线程安全）
+     */
+    private fun stopProcess(processRef: AtomicReference<Process?>) {
+        val process = processRef.getAndSet(null) ?: return
         if (process.isAlive) {
             runCatching {
                 // 销毁子进程（如 ssh.exe），防止其在父进程退出后继续运行导致文件占用
@@ -40,6 +73,14 @@ class GitUtils(private val isCancelled: AtomicBoolean) {
                 process.destroyForcibly()
             }
         }
+    }
+
+    /**
+     * 彻底停止当前运行的 Git 及其派生的所有子进程
+     * 特别是针对 Windows 下 SSH 进程可能残留的问题
+     */
+    fun stopCurrentProcess() {
+        stopProcess(currentProcess)
     }
 
     /**
@@ -57,12 +98,14 @@ class GitUtils(private val isCancelled: AtomicBoolean) {
      * @param repoName 本地文件夹名称
      * @param rootFile 克隆到的父目录
      * @param onProgress 进度回调 (阶段, 百分比)
+     * @param taskId 任务唯一标识，支持并发克隆（可选）
      */
     suspend fun cloneRepository(
         url: String,
         repoName: String,
         rootFile: File,
-        onProgress: suspend (phase: String, percent: Int) -> Unit
+        onProgress: suspend (phase: String, percent: Int) -> Unit,
+        taskId: String? = null  // ✅ 新增：任务标识，支持并发
     ): GitCloneResult = withContext(Dispatchers.IO) {
         val processBuilder = ProcessBuilder(
             "git", "clone",
@@ -81,7 +124,18 @@ class GitUtils(private val isCancelled: AtomicBoolean) {
         processBuilder.environment()["GIT_SSH_COMMAND"] = "ssh -o ControlMaster=no"
 
         val process = processBuilder.start()
-        currentProcess = process
+        
+        // ✅ 支持两种进程管理模式：全局模式(旨在单个操作) + 任务模式(旨在并发)
+        val processRef = if (taskId != null) {
+            // 为并发任务创建独立的进程引用
+            val ref = AtomicReference<Process?>(process)
+            taskProcesses[taskId] = ref
+            ref
+        } else {
+            // 对于非并发操作，使用全局进程引用
+            currentProcess.set(process)
+            currentProcess
+        }
 
         try {
             coroutineScope {
@@ -118,11 +172,16 @@ class GitUtils(private val isCancelled: AtomicBoolean) {
             }
         } finally {
             // 无论何种退出情况，确保清理进程资源
-            stopCurrentProcess()
+            // ✅ 为了并发安全，直接使用 processRef 的 stopProcess
+            stopProcess(processRef)
             runCatching { process.inputStream.close() }
             runCatching { process.errorStream.close() }
             runCatching { process.outputStream.close() }
-            currentProcess = null
+            
+            // ✅ 并发模弋下也清理任务收及库
+            if (taskId != null) {
+                taskProcesses.remove(taskId)
+            }
         }
     }
 
@@ -163,6 +222,50 @@ class GitUtils(private val isCancelled: AtomicBoolean) {
             exitCode == 0
         } catch (e: Exception) {
             false
+        }
+    }
+
+    /**
+     * ✅ 分析 Git 错误信息，返回详细的错误描述文本
+     */
+    fun parseGitErrorMessage(output: String, exitCode: Int): String {
+        return when {
+            output.contains("Permission denied", ignoreCase = true) -> "权限拒绝 (Permission Denied)"
+            output.contains("not found", ignoreCase = true) || 
+            output.contains("repository not found", ignoreCase = true) -> "仓库不存在 (Repository Not Found)"
+            output.contains("Connection timed out", ignoreCase = true) || 
+            output.contains("timeout", ignoreCase = true) -> "网络超时 (Network Timeout)"
+            output.contains("No space left", ignoreCase = true) -> "突盘空间不足 (Disk Full)"
+            output.contains("Authentication failed", ignoreCase = true) || 
+            output.contains("fatal: could not read", ignoreCase = true) -> "认证失败 (Authentication Failed)"
+            exitCode == 128 -> "Git 仓库错误或权限问题"
+            exitCode == 129 -> "Git 命令不存在或參数错误"
+            else -> "克隆失败: 退出码 $exitCode"
+        }
+    }
+
+    /**
+     * ✅ 分类错误类型
+     */
+    fun classifyGitError(errorMessage: String, exitCode: Int): GitErrorType {
+        return when {
+            errorMessage.contains("权限", ignoreCase = true) ||
+            errorMessage.contains("Permission", ignoreCase = true) -> GitErrorType.PERMISSION_DENIED
+            
+            errorMessage.contains("仓库不存在", ignoreCase = true) ||
+            errorMessage.contains("not found", ignoreCase = true) -> GitErrorType.REPO_NOT_FOUND
+            
+            errorMessage.contains("超时", ignoreCase = true) ||
+            errorMessage.contains("timeout", ignoreCase = true) ||
+            errorMessage.contains("Timed out", ignoreCase = true) -> GitErrorType.NETWORK_TIMEOUT
+            
+            errorMessage.contains("突盘", ignoreCase = true) ||
+            errorMessage.contains("No space", ignoreCase = true) -> GitErrorType.DISK_FULL
+            
+            errorMessage.contains("认证", ignoreCase = true) ||
+            errorMessage.contains("Authentication", ignoreCase = true) -> GitErrorType.AUTH_FAILED
+            
+            else -> GitErrorType.UNKNOWN
         }
     }
 }
