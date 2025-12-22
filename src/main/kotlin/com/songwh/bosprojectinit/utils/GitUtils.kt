@@ -66,9 +66,10 @@ class GitUtils(private val isCancelled: AtomicBoolean) {
     ): GitCloneResult = withContext(Dispatchers.IO) {
         val processBuilder = ProcessBuilder(
             "git", "clone",
-            "--depth", "1",         // 浅克隆，减少下载量
+            // "--depth", "1",// 浅克隆，不要
+            "--config", "http.postBuffer=20971520",         // 设置缓冲区20M
             "--progress",          // 强制输出进度信息，即使是非交互模式
-            "--single-branch",     // 只拉取当前分支
+            // "--single-branch",     // 只拉取当前分支
             url,
             repoName
         )
@@ -138,6 +139,30 @@ class GitUtils(private val isCancelled: AtomicBoolean) {
             Pair(phase, percent)
         } else {
             null
+        }
+    }
+
+    /**
+     * 检查 Git 仓库是否完整
+     * 通过执行 git status --porcelain 命令来验证
+     * 如果命令成功执行且没有错误，说明仓库是完整的
+     */
+    suspend fun isGitRepoComplete(repoDir: File): Boolean = withContext(Dispatchers.IO) {
+        if (!repoDir.exists() || !File(repoDir, ".git").exists()) {
+            return@withContext false
+        }
+
+        return@withContext try {
+            val processBuilder = ProcessBuilder("git", "status", "--porcelain")
+            processBuilder.directory(repoDir)
+            processBuilder.redirectErrorStream(true)
+            
+            val process = processBuilder.start()
+            val exitCode = process.awaitExit()
+            
+            exitCode == 0
+        } catch (e: Exception) {
+            false
         }
     }
 }

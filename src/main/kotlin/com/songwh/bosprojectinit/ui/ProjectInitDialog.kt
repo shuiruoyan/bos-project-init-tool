@@ -7,6 +7,7 @@ import com.songwh.bosprojectinit.MessageBundle
 import com.songwh.bosprojectinit.logic.ProjectInitializer
 import org.jetbrains.jewel.bridge.JewelComposePanel
 import java.awt.Dimension
+import javax.swing.Action
 import javax.swing.JComponent
 
 /**
@@ -90,5 +91,9 @@ class ProjectInitDialog(private val project: Project) : DialogWrapper(project) {
         } else {
             super.doOKAction()
         }
+    }
+
+    override fun createActions(): Array<out Action?> {
+        return emptyArray()
     }
 }
