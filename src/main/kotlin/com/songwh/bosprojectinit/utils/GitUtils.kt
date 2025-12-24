@@ -7,17 +7,32 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
+import java.util.concurrent.ConcurrentHashMap
 
-data class GitCloneResult(val success: Boolean, val exitCode: Int)
+data class GitCloneResult(
+    val success: Boolean,
+    val exitCode: Int,
+    val errorMessage: String = "",
+    val errorType: GitErrorType = GitErrorType.UNKNOWN
+)
+
+enum class GitErrorType {
+    UNKNOWN
+}
 
 /**
  * 封装 Git 命令行操作的服务类
  * 支持进度解析、超时控制、任务取消以及彻底的进程树清理
+ * 支持并发多个克隆任务的独立进程管理
  */
 class GitUtils(private val isCancelled: AtomicBoolean) {
 
-    // 记录当前正在运行的 Git 进程引用，以便随时强制终止
-    private var currentProcess: Process? = null
+    // ✅ 改为 AtomicReference，确保线程安全的全局进程引用
+    private val currentProcess = AtomicReference<Process?>(null)
+
+    // ✅ 为每个克隆任务维护独立的进程引用，支持并发管理
+    private val taskProcesses = ConcurrentHashMap<String, AtomicReference<Process?>>()
 
     /**
      * 外部请求取消操作，标记状态并停止当前进程
@@ -25,14 +40,17 @@ class GitUtils(private val isCancelled: AtomicBoolean) {
     fun cancel() {
         isCancelled.set(true)
         stopCurrentProcess()
+        // 停止所有并发任务的进程
+        taskProcesses.forEach { (_, processRef) ->
+            stopProcess(processRef)
+        }
     }
 
     /**
-     * 彻底停止当前运行的 Git 及其派生的所有子进程
-     * 特别是针对 Windows 下 SSH 进程可能残留的问题
+     * 彻底停止进程树（线程安全）
      */
-    fun stopCurrentProcess() {
-        val process = currentProcess ?: return
+    private fun stopProcess(processRef: AtomicReference<Process?>) {
+        val process = processRef.getAndSet(null) ?: return
         if (process.isAlive) {
             runCatching {
                 // 销毁子进程（如 ssh.exe），防止其在父进程退出后继续运行导致文件占用
@@ -40,6 +58,14 @@ class GitUtils(private val isCancelled: AtomicBoolean) {
                 process.destroyForcibly()
             }
         }
+    }
+
+    /**
+     * 彻底停止当前运行的 Git 及其派生的所有子进程
+     * 特别是针对 Windows 下 SSH 进程可能残留的问题
+     */
+    fun stopCurrentProcess() {
+        stopProcess(currentProcess)
     }
 
     /**
@@ -57,18 +83,21 @@ class GitUtils(private val isCancelled: AtomicBoolean) {
      * @param repoName 本地文件夹名称
      * @param rootFile 克隆到的父目录
      * @param onProgress 进度回调 (阶段, 百分比)
+     * @param taskId 任务唯一标识，支持并发克隆（可选）
      */
     suspend fun cloneRepository(
         url: String,
         repoName: String,
         rootFile: File,
-        onProgress: suspend (phase: String, percent: Int) -> Unit
+        onProgress: suspend (phase: String, percent: Int) -> Unit,
+        taskId: String? = null  // ✅ 新增：任务标识，支持并发
     ): GitCloneResult = withContext(Dispatchers.IO) {
         val processBuilder = ProcessBuilder(
             "git", "clone",
-            "--depth", "1",         // 浅克隆，减少下载量
+            // "--depth", "1",// 浅克隆，不要
+            "--config", "http.postBuffer=20971520",         // 设置缓冲区20M
             "--progress",          // 强制输出进度信息，即使是非交互模式
-            "--single-branch",     // 只拉取当前分支
+            // "--single-branch",     // 只拉取当前分支
             url,
             repoName
         )
@@ -80,7 +109,18 @@ class GitUtils(private val isCancelled: AtomicBoolean) {
         processBuilder.environment()["GIT_SSH_COMMAND"] = "ssh -o ControlMaster=no"
 
         val process = processBuilder.start()
-        currentProcess = process
+        
+        // ✅ 支持两种进程管理模式：全局模式(旨在单个操作) + 任务模式(旨在并发)
+        val processRef = if (taskId != null) {
+            // 为并发任务创建独立的进程引用
+            val ref = AtomicReference<Process?>(process)
+            taskProcesses[taskId] = ref
+            ref
+        } else {
+            // 对于非并发操作，使用全局进程引用
+            currentProcess.set(process)
+            currentProcess
+        }
 
         try {
             coroutineScope {
@@ -95,9 +135,8 @@ class GitUtils(private val isCancelled: AtomicBoolean) {
                                 line?.let { outputLine ->
                                     // 解析类似 "Receiving objects: 50%" 的进度行
                                     val progressInfo = parseGitProgress(outputLine)
-                                    if (progressInfo != null) {
-                                        val (phase, percent) = progressInfo
-                                        onProgress(phase, percent)
+                                    progressInfo?.let {
+                                        onProgress(progressInfo.first, progressInfo.second)
                                     }
                                 }
                             }
@@ -117,11 +156,16 @@ class GitUtils(private val isCancelled: AtomicBoolean) {
             }
         } finally {
             // 无论何种退出情况，确保清理进程资源
-            stopCurrentProcess()
+            // ✅ 为了并发安全，直接使用 processRef 的 stopProcess
+            stopProcess(processRef)
             runCatching { process.inputStream.close() }
             runCatching { process.errorStream.close() }
             runCatching { process.outputStream.close() }
-            currentProcess = null
+            
+            // ✅ 并发模弋下也清理任务收及库
+            if (taskId != null) {
+                taskProcesses.remove(taskId)
+            }
         }
     }
 
