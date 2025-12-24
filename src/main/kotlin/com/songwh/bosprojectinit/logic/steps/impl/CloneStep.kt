@@ -7,6 +7,7 @@ import com.songwh.bosprojectinit.model.StepExecutionContext
 import com.songwh.bosprojectinit.model.StepResult
 import com.songwh.bosprojectinit.utils.GitCloneResult
 import com.songwh.bosprojectinit.utils.GitUtils
+import com.intellij.openapi.diagnostic.Logger
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.withTimeout
@@ -14,6 +15,8 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.ConcurrentHashMap
@@ -30,6 +33,7 @@ class CloneStep(
     private val onLogUpdate: suspend (List<String>) -> Unit,
     private val onStatsUpdate: suspend (Int, Int) -> Unit,
 ) : IProjectInitStep {
+    private val LOG = Logger.getInstance(CloneStep::class.java)
     override val nameKey: String = "log.step.clone"
     
     // ✅ 进度追踪：存储每个仓库的当前进度 (0-100)
@@ -128,91 +132,49 @@ class CloneStep(
             return@coroutineScope StepResult(false)
         }
         val totalRepos = context.urls.size
-        val globalStartTime = System.currentTimeMillis()
-        val globalTimeoutMs = context.timeoutSeconds * 1000 * totalRepos / 2  // 简单水等戆配，实际为：至多 2-3 个仓库並发
         val maxConcurrentRepos = minOf(3, totalRepos)  // ⚠️ 限制并发数为 3 个git仓库数
+        val semaphore = Semaphore(maxConcurrentRepos)
 
-        // ✅ 区分批次执行，每个批次执行 maxConcurrentRepos 个
-        val results = mutableListOf<RepositoryResult>()
-        val repoSlices = context.urls.chunked(maxConcurrentRepos).mapIndexed { batchIndex, batch ->
-            batch.mapIndexed { indexInBatch, url ->
-                val actualIndex = batchIndex * maxConcurrentRepos + indexInBatch
-                Pair(actualIndex, url)
-            }
-        }
-        // 批次执行所有仓库
-        for (batch in repoSlices) {
-            if (isCancelled.get()) {
-                batch.forEach { (_, url) ->
+        // ✅ 滑动窗口并发：任何一个 clone 任务结束都会立刻释放 permit，从而启动下一个仓库
+        val tasks = context.urls.mapIndexed { index, url ->
+            async {
+                if (isCancelled.get()) {
                     updateLog(url, MessageBundle.message("log.cancelled"), 0)
+                    return@async RepositoryResult.CANCELLED
                 }
-                return@coroutineScope StepResult(false)
-            }
 
-            // ✅ 批次並发执行每个仓库
-            val batchTasks = batch.map { (actualIndex, url) ->
-                async {
-                    // 计算此仓库的动态超时
-                    val remainingTime = globalTimeoutMs - (System.currentTimeMillis() - globalStartTime)
-                    val perRepoTimeout = minOf(
-                        remainingTime.coerceAtLeast(10_000L),  // 至少 10 秒乚群无法克隆
-                        context.timeoutSeconds * 1000
-                    )
+                semaphore.withPermit {
+                    if (isCancelled.get()) {
+                        updateLog(url, MessageBundle.message("log.cancelled"), 0)
+                        return@withPermit RepositoryResult.CANCELLED
+                    }
+
+                    // 单仓库固定超时：严格使用用户输入的 timeoutSeconds
+                    val perRepoTimeout = (context.timeoutSeconds.coerceAtLeast(1) * 1000)
 
                     processSingleRepository(
                         context = context,
                         url = url,
                         projectsDir = projectsDir,
-                        index = actualIndex,
+                        index = index,
                         totalRepos = totalRepos,
                         stepIndex = stepIndex,
                         totalSteps = totalSteps,
                         perRepoTimeout = perRepoTimeout,
-                        taskId = "clone_${actualIndex}_${url.hashCode()}"  // ✅ 为了並发安全，每个任务一个唯一 ID
+                        taskId = "clone_${index}_${url.hashCode()}"  // ✅ 每个任务一个唯一 ID
                     )
                 }
-            }
-
-            // ✅ 修复：批次等待也需要超时保护
-            try {
-                // 为批次执行超时：单仓库超时 × 批次数量
-                val batchTimeoutMs = context.timeoutSeconds * 1000 * batch.size
-                val batchResults = withTimeout(batchTimeoutMs) {
-                    batchTasks.awaitAll()
-                }
-                results.addAll(batchResults)
-            } catch (e: TimeoutCancellationException) {
-                // ✅ 修复：批次超时时也要记录日志並取消
-                batch.forEach { (_, url) ->
-                    updateLog(url, MessageBundle.message("log.repo.timeout", url), 0)
-                    onStatsUpdate(0, 1)
-                }
-                // 取消所有批次任务
-                batchTasks.forEach { it.cancel() }
-            } catch (e: CancellationException) {
-                // ✅ 修复：等待更清晰，不要丢失查泊信息
-                batchTasks.forEach { it.cancel() }
-                throw e
-            } catch (e: Exception) {
-                // ✅ 捕获其他异常：记录详细错误信息
-                batch.forEach { (_, url) ->
-                    val errorMsg = e.message ?: e.javaClass.simpleName
-                    updateLog(
-                        url,
-                        "批次执行失败: $errorMsg",
-                        0
-                    )
-                    onStatsUpdate(0, 1)
-                }
-                batchTasks.forEach { it.cancel() }
-                e.printStackTrace()  // 打印到控制台
             }
         }
 
-        // 汇总结果
-        val successCount = results.count { it == RepositoryResult.SUCCESS }
-        val failureCount = results.count { it == RepositoryResult.FAILURE }
+        val results = try {
+            tasks.awaitAll()
+        } catch (e: CancellationException) {
+            tasks.forEach { it.cancel() }
+            throw e
+        }
 
+        val failureCount = results.count { it == RepositoryResult.FAILURE }
         StepResult(failureCount == 0 && !isCancelled.get())
     }
 
@@ -227,17 +189,17 @@ class CloneStep(
         totalRepos: Int,
         stepIndex: Int,
         totalSteps: Int,
-        perRepoTimeout: Long = 300_000L,  // ✅ 推示值：5 分钟
+        perRepoTimeout: Long = 60_000L,  // ✅ 推示值：60s
         taskId: String? = null,  // ✅ 任务标识
     ): RepositoryResult {
         return try {
-            // ✅ 初始化该仓库的进度为 0
+            // 初始化该仓库的进度为 0
             repoProgressMap.computeIfAbsent(index) { AtomicInteger(0) }.set(0)
-            
+
             val repoName = gitUtils.extractRepoName(url)
             val targetDir = File(projectsDir, repoName)
 
-            // ✅ 更新进度：使用正确的总体进度计算
+            // 更新进度：使用正确的总体进度计算
             updateGlobalProgress(context, stepIndex, totalSteps, totalRepos)
             updateLog(url, MessageBundle.message("log.repo.start"), 0)
 
@@ -266,7 +228,7 @@ class CloneStep(
                 taskId = taskId
             )
         } catch (e: Exception) {
-            // ✅ 全局异常捕获：记录详细错误信息
+            // 全局异常捕获：记录详细错误信息
             val errorMsg = e.message ?: e.javaClass.simpleName
             val stackTrace = e.stackTraceToString().take(500)  // 限制长度
             updateLog(
@@ -275,7 +237,7 @@ class CloneStep(
                 0
             )
             onStatsUpdate(0, 1)
-            e.printStackTrace()  // 打印到控制台
+            LOG.warn("Unexpected error while processing repository clone", e)  // 打印到控制台
             RepositoryResult.FAILURE
         }
     }
@@ -290,7 +252,11 @@ class CloneStep(
     /**
      * 清理无效目录 - ✅ 修复了 suspend 中的阻塞问题
      */
-    private suspend fun cleanupInvalidDirectory(targetDir: File, maxRetries: Int = 3): Boolean {
+    private suspend fun cleanupInvalidDirectory(
+        targetDir: File,
+        maxRetries: Int = 3,
+        useDelay: Boolean = true
+    ): Boolean {
         if (!targetDir.exists()) return true
 
         repeat(maxRetries) { attempt ->
@@ -302,7 +268,7 @@ class CloneStep(
                 // 继续重试
             }
 
-            if (attempt < maxRetries - 1) {
+            if (useDelay && attempt < maxRetries - 1) {
                 // ✅ 修复：使用 delay() 而不是 Thread.sleep()
                 val delayMs = 100L * (attempt + 1) * (attempt + 1)
                 try {
@@ -329,7 +295,7 @@ class CloneStep(
         totalRepos: Int,
         stepIndex: Int,
         totalSteps: Int,
-        perRepoTimeout: Long = 300_000L,  // ✅ 新增：动态超时
+        perRepoTimeout: Long = 60_000L,  // ✅ 新增：动态超时
         taskId: String? = null,  // ✅ 新增：任务标识
     ): RepositoryResult {
         updateLog(url, MessageBundle.message("log.clone.prepare"), 0)
@@ -361,7 +327,7 @@ class CloneStep(
                             )
                         } catch (e: Exception) {
                             // 避免日志更新失败中断克隆
-                            println("Log update error: ${e.message}")
+                            LOG.warn("Log update error", e)
                         }
                     },
                     taskId = taskId  // ✅ 传递任务 ID
@@ -385,7 +351,7 @@ class CloneStep(
                 0
             )
             onStatsUpdate(0, 1)
-            e.printStackTrace()
+            LOG.warn("Clone operation failed", e)
             RepositoryResult.FAILURE
         }
     }
@@ -426,7 +392,13 @@ class CloneStep(
         updateLog(url, MessageBundle.message("log.repo.timeout", url), 0)
         gitUtils.stopCurrentProcess()
 
-        cleanupAfterFailedClone(url, targetDir, MessageBundle.message("log.clean.timeout", timeoutSeconds))
+        cleanupAfterFailedClone(
+            url = url,
+            targetDir = targetDir,
+            successMessage = MessageBundle.message("log.clean.timeout", timeoutSeconds),
+            maxRetries = 1,
+            useDelay = false
+        )
 
         onStatsUpdate(0, 1)
         return RepositoryResult.FAILURE
@@ -440,8 +412,10 @@ class CloneStep(
         url: String,
         targetDir: File,
         successMessage: String = MessageBundle.message("log.clean.success"),
+        maxRetries: Int = 3,
+        useDelay: Boolean = true,
     ) {
-        val cleanupResult = cleanupInvalidDirectory(targetDir, maxRetries = 3)
+        val cleanupResult = cleanupInvalidDirectory(targetDir, maxRetries = maxRetries, useDelay = useDelay)
         if (cleanupResult) {
             updateLog(url, successMessage, 0)
         } else {
@@ -501,7 +475,7 @@ class CloneStep(
                     context.onProgress(finalProgress, statusMessage)
                 } catch (e: Exception) {
                     // 避免进度回调失败中断克隆
-                    println("Progress callback error: ${e.message}")
+                    LOG.warn("Progress callback error", e)
                 }
             }
         }
