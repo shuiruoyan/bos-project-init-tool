@@ -4,18 +4,12 @@ import com.intellij.openapi.project.Project
 import com.intellij.openapi.vfs.LocalFileSystem
 import com.songwh.bosprojectinit.MessageBundle
 import com.songwh.bosprojectinit.logic.steps.IProjectInitStep
-import com.songwh.bosprojectinit.logic.steps.impl.BuildLocalStep
-import com.songwh.bosprojectinit.logic.steps.impl.CloneStep
-import com.songwh.bosprojectinit.logic.steps.impl.ConfigGradleStep
-import com.songwh.bosprojectinit.logic.steps.impl.ModuleBuildLocalStep
-import com.songwh.bosprojectinit.logic.steps.impl.SettingsStep
+import com.songwh.bosprojectinit.logic.steps.impl.*
 import com.songwh.bosprojectinit.model.LogEntry
-import com.songwh.bosprojectinit.model.ModuleInfo
 import com.songwh.bosprojectinit.model.StepExecutionContext
 import com.songwh.bosprojectinit.utils.GitUtils
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -145,19 +139,6 @@ class ProjectInitializer(private val project: Project) {
         }
     }
 
-    /**
-     * 更新特定仓库的日志状态并推送更新
-     */
-    private suspend fun updateLog(
-        url: String,
-        step: String,
-        progress: Int,
-        onLogUpdate: suspend (List<String>) -> Unit
-    ) {
-        val repoName = gitUtils.extractRepoName(url)
-        logEntries[url] = LogEntry(repoName, step, progress)
-        emitLogs(onLogUpdate)
-    }
 
     /**
      * 收集所有日志条目并格式化为字符串列表发送给 UI

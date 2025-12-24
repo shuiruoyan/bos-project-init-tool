@@ -5,6 +5,7 @@ import com.songwh.bosprojectinit.logic.steps.IProjectInitStep
 import com.songwh.bosprojectinit.model.LogEntry
 import com.songwh.bosprojectinit.model.StepExecutionContext
 import com.songwh.bosprojectinit.model.StepResult
+import com.songwh.bosprojectinit.utils.GitCloneResult
 import com.songwh.bosprojectinit.utils.GitUtils
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.TimeoutCancellationException
@@ -122,6 +123,10 @@ class CloneStep(
         stepIndex: Int,
         totalSteps: Int,
     ): StepResult = coroutineScope {
+        // 事先检查是否已取消
+        if (isCancelled.get()) {
+            return@coroutineScope StepResult(false)
+        }
         val totalRepos = context.urls.size
         val globalStartTime = System.currentTimeMillis()
         val globalTimeoutMs = context.timeoutSeconds * 1000 * totalRepos / 2  // 简单水等戆配，实际为：至多 2-3 个仓库並发
@@ -135,12 +140,6 @@ class CloneStep(
                 Pair(actualIndex, url)
             }
         }
-
-        // 事先检查是否已取消
-        if (isCancelled.get()) {
-            return@coroutineScope StepResult(false)
-        }
-
         // 批次执行所有仓库
         for (batch in repoSlices) {
             if (isCancelled.get()) {
@@ -395,7 +394,7 @@ class CloneStep(
      * 处理克隆结果 - ✅ 展示详细错误信息
      */
     private suspend fun handleCloneResult(
-        cloneResult: com.songwh.bosprojectinit.utils.GitCloneResult,
+        cloneResult: GitCloneResult,
         url: String,
         targetDir: File,
     ): RepositoryResult {
@@ -405,9 +404,7 @@ class CloneStep(
             RepositoryResult.SUCCESS
         } else {
             // ✅ 展示详细的错误信息
-            val errorMsg = if (cloneResult.errorMessage.isNotEmpty()) {
-                cloneResult.errorMessage
-            } else {
+            val errorMsg = cloneResult.errorMessage.ifEmpty {
                 "克隆失败: 退出码 ${cloneResult.exitCode}"
             }
             cleanupAfterFailedClone(url, targetDir)

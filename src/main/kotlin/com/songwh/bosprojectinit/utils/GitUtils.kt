@@ -18,11 +18,6 @@ data class GitCloneResult(
 )
 
 enum class GitErrorType {
-    NETWORK_TIMEOUT,
-    PERMISSION_DENIED,
-    REPO_NOT_FOUND,
-    DISK_FULL,
-    AUTH_FAILED,
     UNKNOWN
 }
 
@@ -48,16 +43,6 @@ class GitUtils(private val isCancelled: AtomicBoolean) {
         // 停止所有并发任务的进程
         taskProcesses.forEach { (_, processRef) ->
             stopProcess(processRef)
-        }
-    }
-
-    /**
-     * 停止指定任务的 Git 进程
-     */
-    private fun stopProcessForTask(taskId: String) {
-        taskProcesses[taskId]?.let { processRef ->
-            stopProcess(processRef)
-            taskProcesses.remove(taskId)
         }
     }
 
@@ -150,9 +135,8 @@ class GitUtils(private val isCancelled: AtomicBoolean) {
                                 line?.let { outputLine ->
                                     // 解析类似 "Receiving objects: 50%" 的进度行
                                     val progressInfo = parseGitProgress(outputLine)
-                                    if (progressInfo != null) {
-                                        val (phase, percent) = progressInfo
-                                        onProgress(phase, percent)
+                                    progressInfo?.let {
+                                        onProgress(progressInfo.first, progressInfo.second)
                                     }
                                 }
                             }
@@ -198,74 +182,6 @@ class GitUtils(private val isCancelled: AtomicBoolean) {
             Pair(phase, percent)
         } else {
             null
-        }
-    }
-
-    /**
-     * 检查 Git 仓库是否完整
-     * 通过执行 git status --porcelain 命令来验证
-     * 如果命令成功执行且没有错误，说明仓库是完整的
-     */
-    suspend fun isGitRepoComplete(repoDir: File): Boolean = withContext(Dispatchers.IO) {
-        if (!repoDir.exists() || !File(repoDir, ".git").exists()) {
-            return@withContext false
-        }
-
-        return@withContext try {
-            val processBuilder = ProcessBuilder("git", "status", "--porcelain")
-            processBuilder.directory(repoDir)
-            processBuilder.redirectErrorStream(true)
-            
-            val process = processBuilder.start()
-            val exitCode = process.awaitExit()
-            
-            exitCode == 0
-        } catch (e: Exception) {
-            false
-        }
-    }
-
-    /**
-     * ✅ 分析 Git 错误信息，返回详细的错误描述文本
-     */
-    fun parseGitErrorMessage(output: String, exitCode: Int): String {
-        return when {
-            output.contains("Permission denied", ignoreCase = true) -> "权限拒绝 (Permission Denied)"
-            output.contains("not found", ignoreCase = true) || 
-            output.contains("repository not found", ignoreCase = true) -> "仓库不存在 (Repository Not Found)"
-            output.contains("Connection timed out", ignoreCase = true) || 
-            output.contains("timeout", ignoreCase = true) -> "网络超时 (Network Timeout)"
-            output.contains("No space left", ignoreCase = true) -> "突盘空间不足 (Disk Full)"
-            output.contains("Authentication failed", ignoreCase = true) || 
-            output.contains("fatal: could not read", ignoreCase = true) -> "认证失败 (Authentication Failed)"
-            exitCode == 128 -> "Git 仓库错误或权限问题"
-            exitCode == 129 -> "Git 命令不存在或參数错误"
-            else -> "克隆失败: 退出码 $exitCode"
-        }
-    }
-
-    /**
-     * ✅ 分类错误类型
-     */
-    fun classifyGitError(errorMessage: String, exitCode: Int): GitErrorType {
-        return when {
-            errorMessage.contains("权限", ignoreCase = true) ||
-            errorMessage.contains("Permission", ignoreCase = true) -> GitErrorType.PERMISSION_DENIED
-            
-            errorMessage.contains("仓库不存在", ignoreCase = true) ||
-            errorMessage.contains("not found", ignoreCase = true) -> GitErrorType.REPO_NOT_FOUND
-            
-            errorMessage.contains("超时", ignoreCase = true) ||
-            errorMessage.contains("timeout", ignoreCase = true) ||
-            errorMessage.contains("Timed out", ignoreCase = true) -> GitErrorType.NETWORK_TIMEOUT
-            
-            errorMessage.contains("突盘", ignoreCase = true) ||
-            errorMessage.contains("No space", ignoreCase = true) -> GitErrorType.DISK_FULL
-            
-            errorMessage.contains("认证", ignoreCase = true) ||
-            errorMessage.contains("Authentication", ignoreCase = true) -> GitErrorType.AUTH_FAILED
-            
-            else -> GitErrorType.UNKNOWN
         }
     }
 }
