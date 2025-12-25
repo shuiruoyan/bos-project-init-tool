@@ -130,7 +130,15 @@ object GitRepoSection {
     /**
      * 判断一行文本是否为潜在的 Git 地址
      */
-    private fun isValidGitUrl(line: String): Boolean {
-        return line.isNotBlank() && (line.startsWith("http") || line.startsWith("git@") || line.endsWith(".git"))
+    internal fun isValidGitUrl(line: String): Boolean {
+        if (line.isBlank()) return false
+        
+        // 防止路径遍历攻击
+        if (line.contains("..")) return false
+        
+        // 使用更严格的正则表达式验证 Git URL 格式
+        val httpsRegex = Regex("^https?://[a-zA-Z0-9.-]+/[a-zA-Z0-9._-]+/[a-zA-Z0-9._-]+(?:\\.git)?\$")
+        val gitRegex = Regex("^git@[a-zA-Z0-9.-]+:[a-zA-Z0-9._-]+/[a-zA-Z0-9._-]+(?:\\.git)?\$")
+        return line.matches(httpsRegex) || line.matches(gitRegex)
     }
 }

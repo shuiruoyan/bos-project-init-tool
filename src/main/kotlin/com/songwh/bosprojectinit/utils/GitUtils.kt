@@ -73,7 +73,19 @@ class GitUtils(private val isCancelled: AtomicBoolean) {
      * 例如: https://github.com/user/my-repo.git -> my-repo
      */
     fun extractRepoName(url: String): String {
-        return url.substringAfterLast("/").substringBefore(".git")
+        // 首先检查 URL 中是否包含路径遍历字符
+        if (url.contains("..")) {
+            throw IllegalArgumentException("Invalid repository URL: contains path traversal characters")
+        }
+        
+        var repoName = url.substringAfterLast("/").substringBefore(".git")
+        
+        // 验证仓库名称只包含安全字符，防止路径遍历和命令注入
+        if (!repoName.matches(Regex("^[a-zA-Z0-9_.-]+$"))) {
+            throw IllegalArgumentException("Invalid repository name: $repoName")
+        }
+        
+        return repoName
     }
 
     /**
