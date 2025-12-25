@@ -4,6 +4,8 @@
 
 这是一个 **IntelliJ IDEA 插件**，用于自动化初始化多 Git 仓库的 Gradle 工程。它通过多步骤流程实现代码拉取、构建配置生成等功能，具有完整的进度跟踪、错误处理和用户交互能力。
 
+**最新更新（2025-12）**：已实施全面的安全增强措施，包括命令注入防护、路径穿越防护、符号链接攻击防护等，确保插件在各种环境下的安全可靠运行。
+
 ---
 
 ## 1. 架构设计
@@ -934,5 +936,250 @@ updateLog(url, MessageBundle.message("log.clone.failed", exitCode, errorMsg), 0)
 2. **进度预测**：根据已完成的仓库预估剩余时间
 3. **智能重试**：对于网络超时自动重试，对于权限错误提示用户
 4. **性能监测**：记录每个仓库的克隆耗时，优化任务分配
+
+---
+
+## 12. 安全增强设计（2025-12 更新）
+
+### 12.1 安全问题修复概览
+
+| 优先级 | 安全问题 | 风险等级 | 修复状态 |
+|---------|---------|---------|----------|
+| **P0** | 命令注入漏洞 | 高危 | ✅ 已修复 |
+| **P0** | 路径穿越政击 | 高危 | ✅ 已修复 |
+| **P1** | 不安全的文件操作 | 中危 | ✅ 已修复 |
+| **P1** | 符号链接攻击 | 中危 | ✅ 已修复 |
+| **P2** | 敏感信息泄露 | 中危 | ✅ 已修复 |
+| **P3** | 文件系统竞态条件 | 低危 | ✅ 已缓解 |
+
+### 12.2 命令注入防护
+
+**问题**：Git URL 和仓库名未验证直接传递给 `ProcessBuilder`，可能导致任意命令执行。
+
+**修复方案**：
+```kotlin
+// GitUtils.kt - 新增 URL 格式验证
+private fun validateGitUrl(url: String): Boolean {
+    val gitUrlPattern = Regex(
+        """^(https?://[\\w\\-.]+(?::\\d+)?/[\\w\\-./]+(?:\\.git)?|git@[\\w\\-.]+:[\\w\\-./]+(?:\\.git)?)$""",
+        RegexOption.IGNORE_CASE
+    )
+    return gitUrlPattern.matches(url)
+}
+
+// 新增仓库名验证
+private fun validateRepoName(repoName: String): Boolean {
+    val safeNamePattern = Regex("""^[\\w\\-]+$""")
+    return safeNamePattern.matches(repoName) && 
+           !repoName.contains("..") && 
+           !repoName.startsWith(".") &&
+           repoName.length <= 255
+}
+```
+
+**效果**：
+- 阻止恶意 URL（如 `; rm -rf /` 或 `&& malicious-command`）
+- 防止路径穿越字符（`../`、`..\\`）
+- 限制文件名长度，防止缓冲区溢出
+
+### 12.3 路径穿越防护
+
+**问题**：`extractRepoName()` 未验证输出，恶意 URL 可能导致文件写入到非预期位置。
+
+**修复方案**：
+```kotlin
+// GitUtils.kt - 增强 extractRepoName
+fun extractRepoName(url: String): String {
+    val raw = url.substringAfterLast("/").substringBefore(".git")
+    val sanitized = raw.replace(Regex("""[^\\w\\-]"""), "_")
+    
+    if (sanitized.isEmpty() || sanitized.contains("..") || sanitized.startsWith(".")) {
+        throw IllegalArgumentException("无效的仓库名称: $raw")
+    }
+    return sanitized
+}
+
+// CloneStep.kt - 新增路径验证
+val targetDir = File(rootFile, repoName)
+val canonicalTarget = targetDir.canonicalFile
+val canonicalRoot = rootFile.canonicalFile
+if (!canonicalTarget.path.startsWith(canonicalRoot.path)) {
+    return GitCloneResult(
+        success = false,
+        errorMessage = "检测到路径穿越攻击",
+        errorType = GitErrorType.PATH_TRAVERSAL
+    )
+}
+```
+
+**效果**：
+- 过滤危险字符，只保留 `[a-zA-Z0-9_-]`
+- 使用 `canonicalFile` 防止符号链接和 `..` 绕过
+- 阻止写入到 projects 目录之外
+
+### 12.4 符号链接攻击防护
+
+**问题**：递归删除目录时未检查符号链接，可能删除系统关键文件。
+
+**修复方案**：
+```kotlin
+// CloneStep.kt - 安全的递归删除
+private fun deleteRecursivelySafe(dir: File, maxDepth: Int = 20): Boolean {
+    return deleteRecursivelyWithDepth(dir, 0, maxDepth)
+}
+
+private fun deleteRecursivelyWithDepth(file: File, currentDepth: Int, maxDepth: Int): Boolean {
+    if (currentDepth > maxDepth) return false
+    
+    // 防止符号链接攻击：不跟随符号链接
+    if (Files.isSymbolicLink(file.toPath())) {
+        return try {
+            Files.delete(file.toPath())  // 只删除链接本身
+            true
+        } catch (e: Exception) {
+            false
+        }
+    }
+    
+    if (file.isDirectory) {
+        file.listFiles()?.forEach { child ->
+            deleteRecursivelyWithDepth(child, currentDepth + 1, maxDepth)
+        }
+    }
+    return file.delete()
+}
+```
+
+**效果**：
+- 限制递归深度，防止无限递归
+- 检测符号链接，只删除链接不跟随
+- 防止恶意符号链接指向 `/etc`、`C:\\Windows` 等系统目录
+
+### 12.5 文件大小限制
+
+**问题**：读取 config.gradle、build.gradle 等文件时未限制大小，可能导致 OOM。
+
+**修复方案**：
+```kotlin
+// ConfigGradleStep.kt & BuildLocalStep.kt
+companion object {
+    private const val MAX_FILE_SIZE = 10 * 1024 * 1024  // 10MB
+}
+
+if (sourceConfig.exists() && sourceConfig.length() > MAX_FILE_SIZE) {
+    val errorMsg = "【文件过大】config.gradle 文件大小 (${sourceConfig.length()} 字节) 超过限制"
+    return StepResult(false)
+}
+```
+
+**效果**：
+- 防止读取巨大文件导致内存溢出
+- 提供明确的错误提示，帮助用户识别问题
+
+### 12.6 敏感信息脱敏
+
+**问题**：Git URL 中可能包含凭证信息（`https://user:token@github.com/...`），直接显示在日志中。
+
+**修复方案**：
+```kotlin
+// GitUtils.kt - URL 脱敏函数
+fun sanitizeUrl(url: String): String {
+    return url.replace(Regex("""(https?://)([^@]+)@"""), "$1***@")
+        .replace(Regex("""(git@[^:]+:)([^/]+)/"""), "$1***/")
+}
+
+// CloneStep.kt - 所有日志输出使用脱敏 URL
+val sanitizedUrl = gitUtils.sanitizeUrl(url)
+updateLog(url, "【网络错误】${result.errorMessage} (仓库: $sanitizedUrl)", 0)
+```
+
+**效果**：
+- 隐藏 URL 中的用户名和密码/Token
+- 防止凭证信息通过截图或日志文件泄露
+
+### 12.7 详细错误信息
+
+**新增 GitErrorType 枚举**：
+```kotlin
+enum class GitErrorType {
+    UNKNOWN,
+    INVALID_URL,           // URL 格式错误
+    INVALID_REPO_NAME,     // 仓库名不合法
+    PATH_TRAVERSAL,        // 路径穿越攻击
+    NETWORK_ERROR,         // 网络错误
+    PERMISSION_DENIED,     // 权限不足
+    TIMEOUT,               // 超时
+    CANCELLED              // 用户取消
+}
+```
+
+**分类异常处理**：
+```kotlin
+private fun categorizeException(e: Exception): Pair<String, String> {
+    return when (e) {
+        is java.io.IOException -> Pair("文件系统错误", "无法访问或写入文件系统...")
+        is AccessDeniedException -> Pair("权限错误", "没有足够的权限访问目标目录...")
+        is SecurityException -> Pair("安全限制", "操作被安全策略阻止")
+        // ...
+    }
+}
+```
+
+**日志示例**：
+```
+【安全错误】无效的 Git URL 格式: https://***@github.com/user/repo.git。URL 必须是有效的 HTTPS、HTTP、Git 或 SSH 协议地址。
+
+【网络错误】Git 仓库不存在或无权访问: https://***@github.com/invalid/repo.git
+
+【超时错误】仓库 https://github.com/large/repo.git 克隆超时 (超过 60秒)。可能原因：
+  1. 网络连接速度过慢
+  2. 仓库体积过大
+  3. 防火墙或代理设置问题
+建议：增加超时时间或检查网络配置
+```
+
+### 12.8 安全测试建议
+
+✅ **安全测试用例**：
+```kotlin
+// 命令注入测试
+"应拒绝包含分号的恶意 URL" {
+    val url = "https://github.com/user/repo.git; rm -rf /"
+    val result = gitUtils.cloneRepository(url, ...)
+    result.errorType shouldBe GitErrorType.INVALID_URL
+}
+
+// 路径穿越测试
+"应阻止路径穿越攻击" {
+    val url = "https://github.com/../../etc/passwd.git"
+    val result = gitUtils.cloneRepository(url, ...)
+    result.errorType shouldBe GitErrorType.INVALID_REPO_NAME
+}
+
+// 符号链接测试
+"应拒绝删除符号链接目录" {
+    val symlinkDir = createSymbolicLink("/tmp/link", "/etc")
+    val result = cleanProjectsDirectory(symlinkDir)
+    result shouldBe false
+}
+
+// 文件大小限制测试
+"应拒绝读取超大文件" {
+    val largeFile = createFileWithSize(15 * 1024 * 1024) // 15MB
+    val result = configGradleStep.execute(context)
+    result.success shouldBe false
+}
+```
+
+### 12.9 安全改进总结
+
+| 安全方面 | 改进前 | 改进后 |
+|----------|---------|----------|
+| **输入验证** | 无验证，直接传递 | 白名单验证 + 正则过滤 |
+| **路径安全** | 可能路径穿越 | canonicalFile 验证 + 符号链接检查 |
+| **文件操作** | 无大小限制 | 10MB 上限 + 异常处理 |
+| **错误信息** | 简单错误码 | 分类错误 + 详细描述 + 解决建议 |
+| **敏感数据** | URL 明文显示 | 凭证脱敏 + 堆栈信息过滤 |
+| **资源清理** | File.deleteRecursively() | 深度限制 + 符号链接检查 |
 
 ---

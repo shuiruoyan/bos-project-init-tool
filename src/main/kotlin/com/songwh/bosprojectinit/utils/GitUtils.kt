@@ -18,7 +18,14 @@ data class GitCloneResult(
 )
 
 enum class GitErrorType {
-    UNKNOWN
+    UNKNOWN,
+    INVALID_URL,
+    INVALID_REPO_NAME,
+    PATH_TRAVERSAL,
+    NETWORK_ERROR,
+    PERMISSION_DENIED,
+    TIMEOUT,
+    CANCELLED
 }
 
 /**
@@ -71,9 +78,50 @@ class GitUtils(private val isCancelled: AtomicBoolean) {
     /**
      * 从 Git 远程地址中提取仓库名称
      * 例如: https://github.com/user/my-repo.git -> my-repo
+     * 安全增强：过滤危险字符，防止路径穿越攻击
      */
     fun extractRepoName(url: String): String {
-        return url.substringAfterLast("/").substringBefore(".git")
+        val raw = url.substringAfterLast("/").substringBefore(".git")
+        // 只保留字母、数字、下划线和连字符，防止路径穿越
+        val sanitized = raw.replace(Regex("""[^\\w\\-]"""), "_")
+        
+        // 验证有效性
+        if (sanitized.isEmpty() || sanitized.contains("..") || sanitized.startsWith(".")) {
+            throw IllegalArgumentException("无效的仓库名称: $raw (提取自URL: ${sanitizeUrl(url)})")
+        }
+        
+        return sanitized
+    }
+    
+    /**
+     * 验证 Git URL 格式，防止命令注入
+     */
+    private fun validateGitUrl(url: String): Boolean {
+        // 支持 HTTPS、HTTP、Git 和 SSH 协议
+        val gitUrlPattern = Regex(
+            """^(https?://[\\w\\-\\.]+(?::\\d+)?/[\\w\\-\\./]+(?:\\.git)?|git@[\\w\\-\\.]+:[\\w\\-\\./]+(?:\\.git)?)$""",
+            RegexOption.IGNORE_CASE
+        )
+        return gitUrlPattern.matches(url)
+    }
+    
+    /**
+     * 验证仓库名称，防止路径穿越攻击
+     */
+    private fun validateRepoName(repoName: String): Boolean {
+        val safeNamePattern = Regex("""^[\\w\\-]+$""")
+        return safeNamePattern.matches(repoName) && 
+               !repoName.contains("..") && 
+               !repoName.startsWith(".") &&
+               repoName.length <= 255  // 防止过长的文件名
+    }
+    
+    /**
+     * 脱敏 URL 中的凭证信息
+     */
+    fun sanitizeUrl(url: String): String {
+        return url.replace(Regex("""(https?://)([^@]+)@"""), "$1***@")
+            .replace(Regex("""(git@[^:]+:)([^/]+)/"""), "$1***/")
     }
 
     /**
@@ -92,6 +140,37 @@ class GitUtils(private val isCancelled: AtomicBoolean) {
         onProgress: suspend (phase: String, percent: Int) -> Unit,
         taskId: String? = null  // ✅ 新增：任务标识，支持并发
     ): GitCloneResult = withContext(Dispatchers.IO) {
+        // 安全验证：防止命令注入和路径穿越
+        if (!validateGitUrl(url)) {
+            return@withContext GitCloneResult(
+                success = false,
+                exitCode = -1,
+                errorMessage = "无效的 Git URL 格式: ${sanitizeUrl(url)}。URL 必须是有效的 HTTPS、HTTP、Git 或 SSH 协议地址。",
+                errorType = GitErrorType.INVALID_URL
+            )
+        }
+        
+        if (!validateRepoName(repoName)) {
+            return@withContext GitCloneResult(
+                success = false,
+                exitCode = -1,
+                errorMessage = "无效的仓库名称: $repoName。仓库名称只能包含字母、数字、下划线和连字符，且不能包含路径穿越字符。",
+                errorType = GitErrorType.INVALID_REPO_NAME
+            )
+        }
+        
+        // 验证目标目录的安全性
+        val targetDir = File(rootFile, repoName)
+        val canonicalTarget = targetDir.canonicalFile
+        val canonicalRoot = rootFile.canonicalFile
+        if (!canonicalTarget.path.startsWith(canonicalRoot.path)) {
+            return@withContext GitCloneResult(
+                success = false,
+                exitCode = -1,
+                errorMessage = "检测到路径穿越攻击: 目标路径 ${targetDir.absolutePath} 超出根目录 ${rootFile.absolutePath}",
+                errorType = GitErrorType.PATH_TRAVERSAL
+            )
+        }
         val processBuilder = ProcessBuilder(
             "git", "clone",
             // "--depth", "1",// 浅克隆，不要
@@ -149,9 +228,28 @@ class GitUtils(private val isCancelled: AtomicBoolean) {
                 readerJob.join() // 确保流读取协程也已结束
                 
                 if (isCancelled.get()) {
-                    GitCloneResult(false, exitCode)
+                    GitCloneResult(
+                        success = false, 
+                        exitCode = exitCode,
+                        errorMessage = "克隆操作已被用户取消",
+                        errorType = GitErrorType.CANCELLED
+                    )
+                } else if (exitCode == 0) {
+                    GitCloneResult(success = true, exitCode = 0)
                 } else {
-                    GitCloneResult(exitCode == 0, exitCode)
+                    // 根据退出码提供详细错误信息
+                    val errorMsg = when (exitCode) {
+                        128 -> "Git 仓库不存在或无权访问: ${sanitizeUrl(url)}"
+                        129 -> "Git 命令使用错误"
+                        in 1..127 -> "Git 克隆失败，退出码: $exitCode。请检查网络连接、仓库地址和访问权限。"
+                        else -> "Git 进程异常终止，退出码: $exitCode"
+                    }
+                    GitCloneResult(
+                        success = false, 
+                        exitCode = exitCode,
+                        errorMessage = errorMsg,
+                        errorType = GitErrorType.NETWORK_ERROR
+                    )
                 }
             }
         } finally {

@@ -7,11 +7,16 @@ import com.songwh.bosprojectinit.model.ModuleInfo
 import com.songwh.bosprojectinit.model.StepExecutionContext
 import com.songwh.bosprojectinit.model.StepResult
 import java.io.File
+import java.nio.file.Files
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * 第三步：生成根目录 build_local.gradle
  * 负责将所有已下载的子模块作为 compile 依赖项添加到根目录的本地构建脚本中。
+ * 
+ * 安全增强：
+ * - 限制文件大小，防止 OOM
+ * - 验证文件路径，防止路径穿越
  */
 class BuildLocalStep(
     private val isCancelled: AtomicBoolean,
@@ -19,6 +24,10 @@ class BuildLocalStep(
     private val onLogUpdate: suspend (List<String>) -> Unit
 ) : IProjectInitStep {
     override val nameKey: String = "log.step.buildLocal"
+    
+    companion object {
+        private const val MAX_FILE_SIZE = 10 * 1024 * 1024  // 10MB
+    }
 
     override suspend fun execute(context: StepExecutionContext, stepIndex: Int, totalSteps: Int): StepResult {
         if (isCancelled.get()) return StepResult(false)
@@ -62,8 +71,17 @@ class BuildLocalStep(
             val rootBuildGradle = File(rootPath, "build.gradle")
             val rootBuildLocal = File(rootPath, "build_local.gradle")
             
+            // 安全检查：验证文件大小
+            if (rootBuildGradle.exists() && rootBuildGradle.length() > MAX_FILE_SIZE) {
+                throw SecurityException("源 build.gradle 文件过大 (${rootBuildGradle.length()} 字节)，超过限制 ($MAX_FILE_SIZE 字节)")
+            }
+            
             val baseContent = if (rootBuildGradle.exists()) {
-                rootBuildGradle.readText()
+                try {
+                    rootBuildGradle.readText()
+                } catch (e: Exception) {
+                    throw Exception("读取根 build.gradle 失败: ${e.message}", e)
+                }
             } else {
                 "// Root build.gradle not found, starting with empty content\n"
             }
@@ -87,12 +105,26 @@ class BuildLocalStep(
             }
 
             // 写入文件
-            rootBuildLocal.writeText(result.toString())
+            try {
+                rootBuildLocal.writeText(result.toString())
+            } catch (e: Exception) {
+                throw Exception("写入 build_local.gradle 失败: ${e.message}", e)
+            }
 
             // 追加 build-suffix.gradle.template 内容
             val suffixTemplate = File(rootPath, "build-suffix.gradle.template")
             if (suffixTemplate.exists()) {
-                val suffixContent = suffixTemplate.readText()
+                // 安全检查：验证模板文件大小
+                if (suffixTemplate.length() > MAX_FILE_SIZE) {
+                    throw SecurityException("build-suffix.gradle.template 文件过大 (${suffixTemplate.length()} 字节)")
+                }
+                
+                val suffixContent = try {
+                    suffixTemplate.readText()
+                } catch (e: Exception) {
+                    throw Exception("读取 build-suffix.gradle.template 失败: ${e.message}", e)
+                }
+                
                 if (suffixContent.isNotBlank()) {
                     val appendContent = StringBuilder()
                     if (!result.endsWith("\n")) {
@@ -100,14 +132,24 @@ class BuildLocalStep(
                     }
                     appendContent.append("\n// --- Append from build-suffix.gradle.template ---\n")
                     appendContent.append(suffixContent)
-                    rootBuildLocal.appendText(appendContent.toString())
+                    
+                    try {
+                        rootBuildLocal.appendText(appendContent.toString())
+                    } catch (e: Exception) {
+                        throw Exception("追加 suffix 内容失败: ${e.message}", e)
+                    }
                 }
             }
         }.onFailure { e ->
+            val errorCategory = when (e) {
+                is SecurityException -> "安全错误"
+                is java.io.IOException -> "文件系统错误"
+                else -> "未知错误"
+            }
             updateCustomLog(
                 "__build_local__",
                 MessageBundle.message("log.buildlocal.label"),
-                MessageBundle.message("log.error", e.message ?: ""),
+                "【$errorCategory】${e.message ?: "未知错误"}",
                 0
             )
         }

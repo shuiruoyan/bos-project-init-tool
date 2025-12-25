@@ -18,6 +18,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import java.io.File
+import java.nio.file.Files
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
@@ -88,9 +89,14 @@ class CloneStep(
 
         return runCatching {
             if (projectsDir.exists()) {
-                val deleted = projectsDir.deleteRecursively()
+                // 安全检查：防止删除符号链接目录
+                if (Files.isSymbolicLink(projectsDir.toPath())) {
+                    throw SecurityException("【安全错误】projects 目录是符号链接，为了安全不允许删除符号链接目录")
+                }
+                
+                val deleted = deleteRecursivelySafe(projectsDir)
                 if (!deleted) {
-                    throw Exception("Failed to delete directory: ${projectsDir.absolutePath}. It might be used by another process.")
+                    throw Exception("删除目录失败: ${projectsDir.absolutePath}。可能被其他进程占用或权限不足。")
                 }
             }
             logEntries["__clean__"] =
@@ -98,12 +104,60 @@ class CloneStep(
             emitLogs()
             true
         }.getOrElse { e ->
+            val errorMsg = when (e) {
+                is SecurityException -> e.message ?: "安全错误"
+                else -> MessageBundle.message("log.clean.failed", e.message ?: "")
+            }
             logEntries["__clean__"] = LogEntry(
                 MessageBundle.message("log.system"),
-                MessageBundle.message("log.clean.failed", e.message ?: ""),
+                errorMsg,
                 0
             )
             emitLogs()
+            false
+        }
+    }
+    
+    /**
+     * 安全地递归删除目录，防止符号链接攻击
+     */
+    private fun deleteRecursivelySafe(dir: File, maxDepth: Int = 20): Boolean {
+        return try {
+            deleteRecursivelyWithDepth(dir, 0, maxDepth)
+        } catch (e: Exception) {
+            LOG.warn("Failed to delete directory recursively: ${dir.absolutePath}", e)
+            false
+        }
+    }
+    
+    /**
+     * 限制深度的递归删除，防止无限递归
+     */
+    private fun deleteRecursivelyWithDepth(file: File, currentDepth: Int, maxDepth: Int): Boolean {
+        if (currentDepth > maxDepth) {
+            LOG.warn("Exceeded max depth ($maxDepth) while deleting: ${file.absolutePath}")
+            return false
+        }
+        
+        // 防止符号链接攻击：不跟随符号链接
+        if (Files.isSymbolicLink(file.toPath())) {
+            return try {
+                Files.delete(file.toPath())
+                true
+            } catch (e: Exception) {
+                false
+            }
+        }
+        
+        if (file.isDirectory) {
+            file.listFiles()?.forEach { child ->
+                deleteRecursivelyWithDepth(child, currentDepth + 1, maxDepth)
+            }
+        }
+        
+        return try {
+            file.delete()
+        } catch (e: Exception) {
             false
         }
     }
@@ -229,16 +283,32 @@ class CloneStep(
             )
         } catch (e: Exception) {
             // 全局异常捕获：记录详细错误信息
-            val errorMsg = e.message ?: e.javaClass.simpleName
-            val stackTrace = e.stackTraceToString().take(500)  // 限制长度
-            updateLog(
-                url,
-                "发生错误: $errorMsg\n堆栈信息: ${stackTrace.take(200)}",
-                0
-            )
+            val sanitizedUrl = gitUtils.sanitizeUrl(url)
+            val errorCategory = categorizeException(e)
+            val errorMsg = "【${errorCategory.first}】${errorCategory.second}\n" +
+                          "仓库: $sanitizedUrl\n" +
+                          "异常类型: ${e.javaClass.simpleName}\n" +
+                          "错误详情: ${e.message ?: "未知错误"}"
+            updateLog(url, errorMsg, 0)
             onStatsUpdate(0, 1)
-            LOG.warn("Unexpected error while processing repository clone", e)  // 打印到控制台
+            LOG.warn("Unexpected error while processing repository $sanitizedUrl", e)
             RepositoryResult.FAILURE
+        }
+    }
+    
+    /**
+     * 对异常进行分类，提供更友好的错误说明
+     */
+    private fun categorizeException(e: Exception): Pair<String, String> {
+        return when (e) {
+            is java.io.IOException -> Pair("文件系统错误", "无法访问或写入文件系统，可能原因：磁盘空间不足、权限不足或目录被占用")
+            is java.nio.file.AccessDeniedException -> Pair("权限错误", "没有足够的权限访问目标目录，请检查文件夹权限")
+            is java.nio.file.FileAlreadyExistsException -> Pair("文件冲突", "目标目录已存在且无法覆盖")
+            is java.nio.file.NoSuchFileException -> Pair("路径错误", "指定的路径不存在")
+            is SecurityException -> Pair("安全限制", "操作被安全策略阻止")
+            is IllegalArgumentException -> Pair("参数错误", e.message ?: "提供的参数不符合要求")
+            is OutOfMemoryError -> Pair("内存不足", "系统内存不足，无法完成操作")
+            else -> Pair("未知错误", "发生了预料之外的错误: ${e.message ?: e.javaClass.simpleName}")
         }
     }
 
@@ -250,7 +320,7 @@ class CloneStep(
     }
 
     /**
-     * 清理无效目录 - ✅ 修复了 suspend 中的阻塞问题
+     * 清理无效目录 - ✅ 修复了 suspend 中的阻塞问题，增强安全性
      */
     private suspend fun cleanupInvalidDirectory(
         targetDir: File,
@@ -258,14 +328,26 @@ class CloneStep(
         useDelay: Boolean = true
     ): Boolean {
         if (!targetDir.exists()) return true
+        
+        // 安全检查：防止删除符号链接目录
+        if (Files.isSymbolicLink(targetDir.toPath())) {
+            LOG.warn("Refusing to delete symbolic link directory: ${targetDir.absolutePath}")
+            return try {
+                Files.delete(targetDir.toPath())
+                true
+            } catch (e: Exception) {
+                LOG.warn("Failed to delete symbolic link", e)
+                false
+            }
+        }
 
         repeat(maxRetries) { attempt ->
             try {
-                if (targetDir.deleteRecursively()) {
+                if (deleteRecursivelySafe(targetDir)) {
                     return true
                 }
             } catch (e: Exception) {
-                // 继续重试
+                LOG.warn("Delete attempt ${attempt + 1} failed for ${targetDir.absolutePath}", e)
             }
 
             if (useDelay && attempt < maxRetries - 1) {
@@ -343,15 +425,14 @@ class CloneStep(
             throw cancellationException
         } catch (e: Exception) {
             // ✅ 捕获其他异常：记录详细错误信息
-            val errorMsg = e.message ?: e.javaClass.simpleName
-            val stackTrace = e.stackTraceToString().take(500)
-            updateLog(
-                url,
-                "克隆操作失败: $errorMsg\n堆栈: ${stackTrace.take(200)}",
-                0
-            )
+            val sanitizedUrl = gitUtils.sanitizeUrl(url)
+            val errorCategory = categorizeException(e)
+            val errorMsg = "【${errorCategory.first}】${errorCategory.second}\n" +
+                          "仓库: $sanitizedUrl\n" +
+                          "异常: ${e.javaClass.simpleName}: ${e.message ?: "未知"}"
+            updateLog(url, errorMsg, 0)
             onStatsUpdate(0, 1)
-            LOG.warn("Clone operation failed", e)
+            LOG.warn("Clone operation failed for $sanitizedUrl", e)
             RepositoryResult.FAILURE
         }
     }
@@ -370,13 +451,41 @@ class CloneStep(
             RepositoryResult.SUCCESS
         } else {
             // ✅ 展示详细的错误信息
-            val errorMsg = cloneResult.errorMessage.ifEmpty {
-                "克隆失败: 退出码 ${cloneResult.exitCode}"
-            }
+            val detailedError = buildDetailedErrorMessage(cloneResult, url)
             cleanupAfterFailedClone(url, targetDir)
-            updateLog(url, MessageBundle.message("log.clone.failed", cloneResult.exitCode, errorMsg), 0)
+            updateLog(url, detailedError, 0)
             onStatsUpdate(0, 1)
+            LOG.warn("Clone failed for ${gitUtils.sanitizeUrl(url)}: ${cloneResult.errorMessage}")
             RepositoryResult.FAILURE
+        }
+    }
+    
+    /**
+     * 构建详细的错误信息
+     */
+    private fun buildDetailedErrorMessage(result: GitCloneResult, url: String): String {
+        val sanitizedUrl = gitUtils.sanitizeUrl(url)
+        return when (result.errorType) {
+            com.songwh.bosprojectinit.utils.GitErrorType.INVALID_URL -> 
+                "【安全错误】${result.errorMessage}"
+            com.songwh.bosprojectinit.utils.GitErrorType.INVALID_REPO_NAME -> 
+                "【安全错误】${result.errorMessage}"
+            com.songwh.bosprojectinit.utils.GitErrorType.PATH_TRAVERSAL -> 
+                "【安全错误】${result.errorMessage}"
+            com.songwh.bosprojectinit.utils.GitErrorType.NETWORK_ERROR -> 
+                "【网络错误】${result.errorMessage} (仓库: $sanitizedUrl)"
+            com.songwh.bosprojectinit.utils.GitErrorType.TIMEOUT -> 
+                "【超时错误】克隆超时: $sanitizedUrl"
+            com.songwh.bosprojectinit.utils.GitErrorType.CANCELLED -> 
+                "【已取消】克隆操作已被用户取消: $sanitizedUrl"
+            com.songwh.bosprojectinit.utils.GitErrorType.PERMISSION_DENIED -> 
+                "【权限错误】无权访问仓库: $sanitizedUrl"
+            else -> {
+                val errorMsg = result.errorMessage.ifEmpty {
+                    "克隆失败: 退出码 ${result.exitCode}"
+                }
+                "【未知错误】$errorMsg (仓库: $sanitizedUrl)"
+            }
         }
     }
 
@@ -389,7 +498,13 @@ class CloneStep(
         targetDir: File,
         timeoutSeconds: Long,
     ): RepositoryResult {
-        updateLog(url, MessageBundle.message("log.repo.timeout", url), 0)
+        val sanitizedUrl = gitUtils.sanitizeUrl(url)
+        val errorMsg = "【超时错误】仓库 $sanitizedUrl 克隆超时 (超过 ${timeoutSeconds}秒)。可能原因：\n" +
+                      "  1. 网络连接速度过慢\n" +
+                      "  2. 仓库体积过大\n" +
+                      "  3. 防火墙或代理设置问题\n" +
+                      "建议：增加超时时间或检查网络配置"
+        updateLog(url, errorMsg, 0)
         gitUtils.stopCurrentProcess()
 
         cleanupAfterFailedClone(
@@ -401,6 +516,7 @@ class CloneStep(
         )
 
         onStatsUpdate(0, 1)
+        LOG.warn("Clone timeout for $sanitizedUrl after ${timeoutSeconds}s")
         return RepositoryResult.FAILURE
     }
 
