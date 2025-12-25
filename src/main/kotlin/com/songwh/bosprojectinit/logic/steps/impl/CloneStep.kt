@@ -196,6 +196,14 @@ class CloneStep(
             // 初始化该仓库的进度为 0
             repoProgressMap.computeIfAbsent(index) { AtomicInteger(0) }.set(0)
 
+            val displayUrl = gitUtils.sanitizeGitUrlForDisplay(url)
+            if (!gitUtils.isSupportedGitRemote(url)) {
+                val reason = gitUtils.explainUnsupportedGitRemote(url) ?: "unsupported"
+                updateLog(displayUrl, MessageBundle.message("log.error", "Unsafe git url ($reason)"), 0)
+                onStatsUpdate(0, 1)
+                return RepositoryResult.FAILURE
+            }
+
             val repoName = gitUtils.extractRepoName(url)
             val targetDir = File(projectsDir, repoName)
 
@@ -230,10 +238,9 @@ class CloneStep(
         } catch (e: Exception) {
             // 全局异常捕获：记录详细错误信息
             val errorMsg = e.message ?: e.javaClass.simpleName
-            val stackTrace = e.stackTraceToString().take(500)  // 限制长度
             updateLog(
-                url,
-                "发生错误: $errorMsg\n堆栈信息: ${stackTrace.take(200)}",
+                gitUtils.sanitizeGitUrlForDisplay(url),
+                "发生错误: $errorMsg",
                 0
             )
             onStatsUpdate(0, 1)
@@ -389,7 +396,8 @@ class CloneStep(
         targetDir: File,
         timeoutSeconds: Long,
     ): RepositoryResult {
-        updateLog(url, MessageBundle.message("log.repo.timeout", url), 0)
+        val displayUrl = gitUtils.sanitizeGitUrlForDisplay(url)
+        updateLog(displayUrl, MessageBundle.message("log.repo.timeout", displayUrl), 0)
         gitUtils.stopCurrentProcess()
 
         cleanupAfterFailedClone(
@@ -428,7 +436,7 @@ class CloneStep(
      * 更新日志 - ✅ 线程安全
      */
     private suspend fun updateLog(url: String, step: String, progress: Int) {
-        val repoName = gitUtils.extractRepoName(url)
+        val repoName = runCatching { gitUtils.extractRepoName(url) }.getOrElse { url }
         synchronized(logEntries) {
             logEntries[url] = LogEntry(repoName, step, progress)
         }

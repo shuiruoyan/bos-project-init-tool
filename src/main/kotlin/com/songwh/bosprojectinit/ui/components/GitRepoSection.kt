@@ -24,6 +24,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
 import com.songwh.bosprojectinit.MessageBundle
 import com.songwh.bosprojectinit.ui.Typography
+import com.songwh.bosprojectinit.utils.GitUtils
 import org.jetbrains.jewel.ui.component.Text
 
 /**
@@ -131,6 +132,6 @@ object GitRepoSection {
      * 判断一行文本是否为潜在的 Git 地址
      */
     private fun isValidGitUrl(line: String): Boolean {
-        return line.isNotBlank() && (line.startsWith("http") || line.startsWith("git@") || line.endsWith(".git"))
+        return GitUtils.isSupportedGitRemoteUrl(line)
     }
 }

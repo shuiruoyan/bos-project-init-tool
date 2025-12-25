@@ -6,6 +6,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.net.URI
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 import java.util.concurrent.ConcurrentHashMap
@@ -73,7 +74,143 @@ class GitUtils(private val isCancelled: AtomicBoolean) {
      * 例如: https://github.com/user/my-repo.git -> my-repo
      */
     fun extractRepoName(url: String): String {
-        return url.substringAfterLast("/").substringBefore(".git")
+        return extractRepoNameFromUrl(url)
+    }
+
+    internal fun isSupportedGitRemote(url: String): Boolean = isSupportedGitRemoteUrl(url)
+
+    internal fun explainUnsupportedGitRemote(url: String): String? = validateGitRemoteUrl(url)
+
+    internal fun sanitizeGitUrlForDisplay(url: String): String {
+        val normalized = url.trim().replace(Regex("[\r\n\u0000]"), "")
+
+        val maskedUserInfo = runCatching {
+            val uri = URI(normalized)
+            if (uri.userInfo.isNullOrBlank()) return@runCatching normalized
+            URI(
+                uri.scheme,
+                "***",
+                uri.host,
+                uri.port,
+                uri.path,
+                uri.query,
+                uri.fragment
+            ).toString()
+        }.getOrDefault(normalized)
+
+        return maskedUserInfo
+            .replace(Regex("(?i)(access_token|token|password|passwd|pwd)=([^&]+)"), "$1=***")
+    }
+
+    internal fun buildCloneCommand(url: String, repoName: String): List<String> {
+        return listOf(
+            "git", "clone",
+            "--config", "http.postBuffer=20971520",
+            "--progress",
+            "--",
+            url,
+            repoName
+        )
+    }
+
+    companion object {
+        internal fun validateGitRemoteUrl(url: String): String? {
+            val normalized = url.trim()
+            if (normalized.isEmpty()) return "empty"
+            if (normalized.any { it == '\n' || it == '\r' || it == '\u0000' }) return "contains control characters"
+            if (normalized.startsWith("-")) return "starts with '-'"
+            if (normalized.startsWith("file:", ignoreCase = true)) return "file scheme is not allowed"
+            if (normalized.contains("\\")) return "contains backslash"
+
+            return when {
+                normalized.startsWith("http://", ignoreCase = true) || normalized.startsWith("https://", ignoreCase = true) -> {
+                    val ok = runCatching {
+                        val uri = URI(normalized)
+                        uri.host != null
+                    }.getOrDefault(false)
+                    if (ok) null else "invalid http(s) url"
+                }
+
+                normalized.startsWith("git@") -> {
+                    val scpLike = Regex("""^git@[^\s:]+:[^\s]+$""")
+                    if (scpLike.matches(normalized)) null else "invalid scp-like ssh url"
+                }
+
+                normalized.startsWith("ssh://", ignoreCase = true) || normalized.startsWith("git://", ignoreCase = true) -> {
+                    val ok = runCatching {
+                        val uri = URI(normalized)
+                        uri.host != null
+                    }.getOrDefault(false)
+                    if (ok) null else "invalid ssh/git url"
+                }
+
+                else -> "unsupported scheme"
+            }
+        }
+
+        internal fun isSupportedGitRemoteUrl(url: String): Boolean {
+            return validateGitRemoteUrl(url) == null
+        }
+
+        internal fun extractGitErrorLine(line: String): String? {
+            val trimmed = line.trim()
+            if (trimmed.isEmpty()) return null
+            val lowered = trimmed.lowercase()
+            return when {
+                lowered.startsWith("fatal:") -> trimmed
+                lowered.startsWith("error:") -> trimmed
+                lowered.contains("permission denied") -> trimmed
+                lowered.contains("repository not found") -> trimmed
+                else -> null
+            }
+        }
+
+        internal fun extractRepoNameFromUrl(url: String): String {
+            val normalized = url.trim()
+            val rawName = extractRawRepoName(normalized)
+            return sanitizeRepoName(rawName)
+        }
+
+        internal fun isSafeRepoName(repoName: String): Boolean {
+            return runCatching {
+                sanitizeRepoName(repoName)
+                true
+            }.getOrDefault(false)
+        }
+
+        private fun extractRawRepoName(url: String): String {
+            val trimmed = url.trim()
+            if (trimmed.isEmpty()) throw IllegalArgumentException("Empty git url")
+
+            val candidate = when {
+                trimmed.startsWith("git@") && trimmed.contains(":") -> {
+                    val afterColon = trimmed.substringAfterLast(":")
+                    if (afterColon.contains("/")) afterColon.substringAfterLast("/") else afterColon
+                }
+                trimmed.contains("/") -> trimmed.substringAfterLast("/")
+                else -> trimmed
+            }
+
+            return candidate.substringBefore(".git")
+        }
+
+        private fun sanitizeRepoName(repoName: String): String {
+            val trimmed = repoName.trim().removeSuffix(".git")
+            if (trimmed.isEmpty()) throw IllegalArgumentException("Invalid repository name")
+            if (trimmed == "." || trimmed == "..") throw IllegalArgumentException("Invalid repository name")
+            if (trimmed.contains("..")) throw IllegalArgumentException("Invalid repository name")
+            if (trimmed.contains("/") || trimmed.contains("\\")) throw IllegalArgumentException("Invalid repository name")
+
+            val sanitized = trimmed
+                .replace(Regex("[^A-Za-z0-9._-]"), "_")
+                .replace(Regex("_+"), "_")
+                .trim('_')
+                .take(100)
+
+            if (sanitized.isEmpty()) throw IllegalArgumentException("Invalid repository name")
+            if (sanitized.startsWith("-")) throw IllegalArgumentException("Invalid repository name")
+            return sanitized
+        }
     }
 
     /**
@@ -92,15 +229,23 @@ class GitUtils(private val isCancelled: AtomicBoolean) {
         onProgress: suspend (phase: String, percent: Int) -> Unit,
         taskId: String? = null  // ✅ 新增：任务标识，支持并发
     ): GitCloneResult = withContext(Dispatchers.IO) {
-        val processBuilder = ProcessBuilder(
-            "git", "clone",
-            // "--depth", "1",// 浅克隆，不要
-            "--config", "http.postBuffer=20971520",         // 设置缓冲区20M
-            "--progress",          // 强制输出进度信息，即使是非交互模式
-            // "--single-branch",     // 只拉取当前分支
-            url,
-            repoName
-        )
+        val invalidReason = validateGitRemoteUrl(url)
+        if (invalidReason != null) {
+            return@withContext GitCloneResult(
+                success = false,
+                exitCode = -1,
+                errorMessage = "Unsafe git url: ${sanitizeGitUrlForDisplay(url)} ($invalidReason)"
+            )
+        }
+        if (!isSafeRepoName(repoName)) {
+            return@withContext GitCloneResult(
+                success = false,
+                exitCode = -1,
+                errorMessage = "Invalid repository name: $repoName"
+            )
+        }
+
+        val processBuilder = ProcessBuilder(buildCloneCommand(url, repoName))
         processBuilder.directory(rootFile)
         processBuilder.redirectErrorStream(true) // 合并标准输出和标准错误流
         
@@ -122,6 +267,8 @@ class GitUtils(private val isCancelled: AtomicBoolean) {
             currentProcess
         }
 
+        val lastErrorLine = AtomicReference<String?>(null)
+
         try {
             coroutineScope {
                 // 启动协程读取输出流
@@ -133,6 +280,7 @@ class GitUtils(private val isCancelled: AtomicBoolean) {
                                 if (isCancelled.get()) break // 响应取消信号
 
                                 line?.let { outputLine ->
+                                    extractGitErrorLine(outputLine)?.let { lastErrorLine.set(it) }
                                     // 解析类似 "Receiving objects: 50%" 的进度行
                                     val progressInfo = parseGitProgress(outputLine)
                                     progressInfo?.let {
@@ -151,7 +299,15 @@ class GitUtils(private val isCancelled: AtomicBoolean) {
                 if (isCancelled.get()) {
                     GitCloneResult(false, exitCode)
                 } else {
-                    GitCloneResult(exitCode == 0, exitCode)
+                    if (exitCode == 0) {
+                        GitCloneResult(true, exitCode)
+                    } else {
+                        GitCloneResult(
+                            success = false,
+                            exitCode = exitCode,
+                            errorMessage = lastErrorLine.get() ?: "Git clone failed with exit code $exitCode"
+                        )
+                    }
                 }
             }
         } finally {

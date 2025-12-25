@@ -6,6 +6,7 @@ import com.songwh.bosprojectinit.model.LogEntry
 import com.songwh.bosprojectinit.model.ModuleInfo
 import com.songwh.bosprojectinit.model.StepExecutionContext
 import com.songwh.bosprojectinit.model.StepResult
+import com.songwh.bosprojectinit.utils.GitUtils
 import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -28,7 +29,7 @@ class ModuleBuildLocalStep(
             
             // 从 URL 列表中提取所有有效的仓库名称，用于过滤需要处理的子模块
             val allowedRepos = context.urls.map { url ->
-                url.substringAfterLast("/").substringBefore(".git")
+                GitUtils.extractRepoNameFromUrl(url)
             }.toSet()
 
             // 过滤出属于配置仓库的模块进行 build_local.gradle 构建

@@ -1,6 +1,7 @@
 package com.songwh.bosprojectinit.logic.steps.impl
 
 import com.songwh.bosprojectinit.model.ModuleInfo
+import com.songwh.bosprojectinit.utils.GitUtils
 import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
 import java.nio.file.Files
@@ -100,9 +101,7 @@ class SettingsStepTest {
             "git@github.com:user/repo2.git",
             "http://internal.com/group/subgroup/repo3.git"
         )
-        val allowedRepos = urls.map { url ->
-            url.substringAfterLast("/").substringBefore(".git")
-        }.toSet()
+        val allowedRepos = urls.map { url -> GitUtils.extractRepoNameFromUrl(url) }.toSet()
         
         assertEquals(setOf("repo1", "repo2", "repo3"), allowedRepos)
     }
