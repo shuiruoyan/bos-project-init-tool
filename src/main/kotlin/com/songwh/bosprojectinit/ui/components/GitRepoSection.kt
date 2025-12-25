@@ -131,6 +131,16 @@ object GitRepoSection {
      * 判断一行文本是否为潜在的 Git 地址
      */
     private fun isValidGitUrl(line: String): Boolean {
-        return line.isNotBlank() && (line.startsWith("http") || line.startsWith("git@") || line.endsWith(".git"))
+        if (line.isBlank()) return false
+        val trimmed = line.trim()
+        // 拒绝以减号开头的地址，防止命令注入
+        if (trimmed.startsWith("-")) return false
+        
+        // 基本格式检查
+        return trimmed.startsWith("http://") || 
+               trimmed.startsWith("https://") || 
+               trimmed.startsWith("git@") || 
+               trimmed.endsWith(".git") ||
+               trimmed.startsWith("ssh://")
     }
 }

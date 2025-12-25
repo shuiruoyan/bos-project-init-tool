@@ -23,6 +23,15 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
+ * 单个仓库处理结果枚举
+ */
+enum class RepositoryResult {
+    SUCCESS,
+    FAILURE,
+    CANCELLED
+}
+
+/**
  * 第一步：代码拉取步骤 (CloneStep)
  * 负责清空旧目录（可选）以及从远程拉取指定的 Git 仓库。
  */
@@ -181,7 +190,7 @@ class CloneStep(
     /**
      * 处理单个仓库 - ✅ 添加了全局异常捕获
      */
-    private suspend fun processSingleRepository(
+    internal suspend fun processSingleRepository(
         context: StepExecutionContext,
         url: String,
         projectsDir: File,
@@ -197,7 +206,19 @@ class CloneStep(
             repoProgressMap.computeIfAbsent(index) { AtomicInteger(0) }.set(0)
 
             val repoName = gitUtils.extractRepoName(url)
+            if (repoName.isBlank() || repoName == "." || repoName == "..") {
+                updateLog(url, "无效的仓库名称: $repoName", 0)
+                onStatsUpdate(0, 1)
+                return RepositoryResult.FAILURE
+            }
             val targetDir = File(projectsDir, repoName)
+
+            // 路径安全检查：确保 targetDir 确实在 projectsDir 之下
+            if (!targetDir.canonicalPath.startsWith(projectsDir.canonicalPath + File.separator)) {
+                updateLog(url, "检测到非法路径: $repoName", 0)
+                onStatsUpdate(0, 1)
+                return RepositoryResult.FAILURE
+            }
 
             // 更新进度：使用正确的总体进度计算
             updateGlobalProgress(context, stepIndex, totalSteps, totalRepos)
@@ -492,11 +513,3 @@ class CloneStep(
     }
 }
 
-/**
- * 仓库处理结果枚举
- */
-private enum class RepositoryResult {
-    SUCCESS,
-    FAILURE,
-    CANCELLED
-}

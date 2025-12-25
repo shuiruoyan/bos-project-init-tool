@@ -26,7 +26,7 @@ enum class GitErrorType {
  * 支持进度解析、超时控制、任务取消以及彻底的进程树清理
  * 支持并发多个克隆任务的独立进程管理
  */
-class GitUtils(private val isCancelled: AtomicBoolean) {
+open class GitUtils(private val isCancelled: AtomicBoolean) {
 
     // ✅ 改为 AtomicReference，确保线程安全的全局进程引用
     private val currentProcess = AtomicReference<Process?>(null)
@@ -72,8 +72,16 @@ class GitUtils(private val isCancelled: AtomicBoolean) {
      * 从 Git 远程地址中提取仓库名称
      * 例如: https://github.com/user/my-repo.git -> my-repo
      */
-    fun extractRepoName(url: String): String {
-        return url.substringAfterLast("/").substringBefore(".git")
+    open fun extractRepoName(url: String): String {
+        val lastSlash = url.lastIndexOf('/')
+        val rawName = if (lastSlash != -1) {
+            url.substring(lastSlash + 1).substringBefore(".git")
+        } else {
+            url.substringBefore(".git")
+        }
+        // 安全性增强：仅允许字母、数字、下划线、中划线，彻底防止目录遍历
+        // 不允许点号，防止 . 或 .. 攻击
+        return rawName.filter { it.isLetterOrDigit() || it == '_' || it == '-' }
     }
 
     /**
@@ -92,6 +100,11 @@ class GitUtils(private val isCancelled: AtomicBoolean) {
         onProgress: suspend (phase: String, percent: Int) -> Unit,
         taskId: String? = null  // ✅ 新增：任务标识，支持并发
     ): GitCloneResult = withContext(Dispatchers.IO) {
+        // 安全性检查：防止命令注入
+        if (url.startsWith("-") || repoName.startsWith("-")) {
+            return@withContext GitCloneResult(false, -1, "Invalid parameters")
+        }
+
         val processBuilder = ProcessBuilder(
             "git", "clone",
             // "--depth", "1",// 浅克隆，不要
