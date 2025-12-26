@@ -228,17 +228,16 @@ class CloneStep(
                 taskId = taskId
             )
         } catch (e: Exception) {
-            // 全局异常捕获：记录详细错误信息到日志
+            // 全局异常捕获：记录详细错误信息
             val errorMsg = e.message ?: e.javaClass.simpleName
-            // 将堆栈信息记录到 IntelliJ 日志系统，而不是显示给用户
-            LOG.warn("Unexpected error while processing repository clone: $url", e)
-            // 用户界面只显示简化的错误信息
+            val stackTrace = e.stackTraceToString().take(500)  // 限制长度
             updateLog(
                 url,
-                "发生错误: $errorMsg",
+                "发生错误: $errorMsg\n堆栈信息: ${stackTrace.take(200)}",
                 0
             )
             onStatsUpdate(0, 1)
+            LOG.warn("Unexpected error while processing repository clone", e)  // 打印到控制台
             RepositoryResult.FAILURE
         }
     }
@@ -313,13 +312,13 @@ class CloneStep(
                         if (percent > maxRepoPercent) {
                             maxRepoPercent = percent
                         }
-                        
+
                         // ✅ 更新当前仓库的进度
                         repoProgressMap.computeIfAbsent(index) { AtomicInteger(0) }.set(maxRepoPercent)
-                        
+
                         // ✅ 更新总体进度（线程安全）
                         updateGlobalProgress(context, stepIndex, totalSteps, totalRepos, repoName, phase, percent)
-                        
+
                         try {
                             updateLog(
                                 url,
@@ -343,17 +342,16 @@ class CloneStep(
             gitUtils.stopCurrentProcess()
             throw cancellationException
         } catch (e: Exception) {
-            // ✅ 捕获其他异常：记录详细错误信息到日志系统
+            // ✅ 捕获其他异常：记录详细错误信息
             val errorMsg = e.message ?: e.javaClass.simpleName
-            // 将完整的异常信息记录到 IntelliJ 日志系统
-            LOG.warn("Clone operation failed: $url", e)
-            // 用户界面只显示简化的错误信息
+            val stackTrace = e.stackTraceToString().take(500)
             updateLog(
                 url,
-                "克隆操作失败: $errorMsg",
+                "克隆操作失败: $errorMsg\n堆栈: ${stackTrace.take(200)}",
                 0
             )
             onStatsUpdate(0, 1)
+            LOG.warn("Clone operation failed", e)
             RepositoryResult.FAILURE
         }
     }
