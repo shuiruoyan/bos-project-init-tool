@@ -228,16 +228,17 @@ class CloneStep(
                 taskId = taskId
             )
         } catch (e: Exception) {
-            // 全局异常捕获：记录详细错误信息
+            // 全局异常捕获：记录详细错误信息到日志
             val errorMsg = e.message ?: e.javaClass.simpleName
-            val stackTrace = e.stackTraceToString().take(500)  // 限制长度
+            // 将堆栈信息记录到 IntelliJ 日志系统，而不是显示给用户
+            LOG.warn("Unexpected error while processing repository clone: $url", e)
+            // 用户界面只显示简化的错误信息
             updateLog(
                 url,
-                "发生错误: $errorMsg\n堆栈信息: ${stackTrace.take(200)}",
+                "发生错误: $errorMsg",
                 0
             )
             onStatsUpdate(0, 1)
-            LOG.warn("Unexpected error while processing repository clone", e)  // 打印到控制台
             RepositoryResult.FAILURE
         }
     }
@@ -342,16 +343,17 @@ class CloneStep(
             gitUtils.stopCurrentProcess()
             throw cancellationException
         } catch (e: Exception) {
-            // ✅ 捕获其他异常：记录详细错误信息
+            // ✅ 捕获其他异常：记录详细错误信息到日志系统
             val errorMsg = e.message ?: e.javaClass.simpleName
-            val stackTrace = e.stackTraceToString().take(500)
+            // 将完整的异常信息记录到 IntelliJ 日志系统
+            LOG.warn("Clone operation failed: $url", e)
+            // 用户界面只显示简化的错误信息
             updateLog(
                 url,
-                "克隆操作失败: $errorMsg\n堆栈: ${stackTrace.take(200)}",
+                "克隆操作失败: $errorMsg",
                 0
             )
             onStatsUpdate(0, 1)
-            LOG.warn("Clone operation failed", e)
             RepositoryResult.FAILURE
         }
     }
