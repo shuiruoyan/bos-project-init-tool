@@ -37,6 +37,17 @@
 
     <!-- Extensions defined by the plugin.
          Read more: https://plugins.jetbrains.com/docs/intellij/plugin-extension-points.html -->
+    <extensions defaultExtensionNs="com.intellij">
+        <!-- 注册应用级别的服务 -->
+        <applicationService serviceImplementation="com.songwh.bosprojectinit.settings.PluginSettings"/>
+        
+        <!-- 注册设置页面 -->
+        <applicationConfigurable
+                parentId="tools"
+                instance="com.songwh.bosprojectinit.settings.PluginSettingsConfigurable"
+                id="com.songwh.bosprojectinit.settings.PluginSettingsConfigurable"
+                displayName="BOS Project Initialization"/>
+    </extensions>
     <!--<extensions defaultExtensionNs="com.intellij">
         <toolWindow id="BosProjectInitTool" factoryClass="com.songwh.bosprojectinit.BosProjectInitToolFactory"
                     icon="AllIcons.Toolwindows.ToolWindowPalette"/>
