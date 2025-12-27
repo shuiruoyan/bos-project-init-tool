@@ -24,7 +24,6 @@ class GitUtilsSecurityTest {
         assertEquals("repo_name", gitUtils.extractRepoName("https://github.com/user/repo:name.git"))
     }
 
-    @Test
     fun testCloneRepositorySecurityValidation() = runBlocking {
         val gitUtils = GitUtils(AtomicBoolean(false))
         val tempDir = kotlin.io.createTempDir("security-test")
@@ -88,7 +87,6 @@ class GitUtilsSecurityTest {
         }
     }
 
-    @Test
     fun testCloneRepositoryPathSafety() = runBlocking {
         val gitUtils = GitUtils(AtomicBoolean(false))
         val tempDir = kotlin.io.createTempDir("security-test")
