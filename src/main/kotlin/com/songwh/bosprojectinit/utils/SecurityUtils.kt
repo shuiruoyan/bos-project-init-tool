@@ -1,6 +1,8 @@
 package com.songwh.bosprojectinit.utils
 
+import com.intellij.openapi.diagnostic.Logger
 import com.songwh.bosprojectinit.MessageBundle
+import com.songwh.bosprojectinit.logic.steps.impl.CloneStep
 import java.io.File
 import java.net.URI
 import java.net.URISyntaxException
@@ -10,6 +12,8 @@ import java.util.regex.Pattern
  * 安全工具类，提供输入验证和消毒功能
  */
 object SecurityUtils {
+
+    private val LOG = Logger.getInstance(SecurityUtils::class.java)
     
     /**
      * 最大URL长度限制
@@ -56,12 +60,12 @@ object SecurityUtils {
     /**
      * 危险字符模式，用于防止命令注入
      */
-    private val DANGEROUS_CHARS_PATTERN = Pattern.compile("[;&|`\$\\n\\r\\t]")
+    private val DANGEROUS_CHARS_PATTERN = Pattern.compile("[;&|`$\\n\\r\\t]")
     
     /**
      * 路径遍历模式
      */
-    private val PATH_TRAVERSAL_PATTERN = Pattern.compile("\\.\\.(/|\\\\)")
+    private val PATH_TRAVERSAL_PATTERN = Pattern.compile("\\.\\.([/\\\\])")
     
     /**
      * 验证Git URL是否安全
@@ -232,7 +236,8 @@ object SecurityUtils {
             }
             
             scheme != null && ALLOWED_PROTOCOLS.contains(scheme.lowercase())
-        } catch (e: URISyntaxException) {
+        } catch (ex: URISyntaxException) {
+            LOG.error("Failed to parse URI: ${ex.message}")
             // 对于非标准URI格式（如git@host:path），返回true（因为正则已经匹配）
             url.contains('@') && url.contains(':')
         }
