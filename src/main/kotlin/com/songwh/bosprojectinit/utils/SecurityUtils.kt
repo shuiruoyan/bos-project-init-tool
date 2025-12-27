@@ -158,10 +158,19 @@ object SecurityUtils {
     fun validatePathSafety(basePath: String, userPath: String): ValidationResult {
         try {
             val normalizedBase = File(basePath).canonicalPath
-            val normalizedUser = File(basePath, userPath).canonicalPath
+            val userFile = File(userPath)
+            
+            // 如果用户路径是绝对路径，检查它是否在基础路径内
+            val normalizedUser = if (userFile.isAbsolute) {
+                userFile.canonicalPath
+            } else {
+                File(basePath, userPath).canonicalPath
+            }
             
             // 检查用户路径是否在基础路径内
-            if (!normalizedUser.startsWith(normalizedBase)) {
+            // 需要确保 normalizedUser 以 normalizedBase + 文件分隔符开头
+            // 这样可以防止类似 "security-test" 和 "security-test-outside" 的误判
+            if (!normalizedUser.startsWith(normalizedBase + File.separator) && normalizedUser != normalizedBase) {
                 return ValidationResult(false, MessageBundle.message("validation.path.out.of.bounds"))
             }
             

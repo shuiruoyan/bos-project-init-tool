@@ -163,7 +163,8 @@ class SecurityUtilsTest {
             
             // 测试绝对路径（应该失败）
             // 创建一个确定在basePath之外的绝对路径
-            val outsideDir = kotlin.io.createTempDir("security-test-outside")
+            // 使用不同的前缀确保不会意外匹配
+            val outsideDir = kotlin.io.createTempDir("outside-test")
             try {
                 val absolutePath = outsideDir.canonicalPath
                 val absoluteResult = SecurityUtils.validatePathSafety(basePath, absolutePath)
