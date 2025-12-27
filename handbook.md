@@ -741,9 +741,305 @@ failureCount.incrementAndGet()
 
 ---
 
-## 11. CloneStep 并发改造总结
+## 11. 安全设计与实现
 
-### 11.1 改造目标
+### 11.1 安全威胁分析
+
+本项目处理用户输入的 Git URL、仓库名称和文件路径，存在以下安全风险：
+
+| 威胁类型 | 风险描述 | 潜在影响 |
+|----------|----------|----------|
+| **命令注入** | 在 Git URL 或仓库名称中嵌入 shell 命令 | 执行任意系统命令，数据泄露或系统破坏 |
+| **路径遍历** | 使用 `../` 序列访问系统文件 | 读取或写入敏感文件，如 `/etc/passwd` |
+| **缓冲区溢出** | 超长 URL 或仓库名称 | 内存耗尽，服务拒绝 |
+| **协议滥用** | 使用非 Git 协议（如 `javascript:`） | 跨站脚本攻击（如果 URL 被渲染） |
+| **并发安全** | 多线程环境下的竞态条件 | 数据不一致，资源泄漏 |
+
+### 11.2 安全防护措施
+
+#### A. 输入验证层（SecurityUtils.kt）
+
+**1️⃣ Git URL 验证**
+```kotlin
+fun validateGitUrl(url: String): ValidationResult {
+    // 1. 非空检查
+    if (url.isBlank()) return ValidationResult(false, "Git URL不能为空")
+    
+    // 2. 长度限制（最大 2048 字符）
+    if (url.length > MAX_URL_LENGTH) return ValidationResult(false, "Git URL长度超过限制")
+    
+    // 3. 危险字符检查（防止命令注入）
+    if (containsDangerousCharacters(url)) return ValidationResult(false, "Git URL包含危险字符")
+    
+    // 4. 路径遍历检查
+    if (containsPathTraversal(url)) return ValidationResult(false, "Git URL包含路径遍历序列")
+    
+    // 5. 协议白名单验证
+    return if (isValidGitUrlFormat(url)) {
+        ValidationResult(true, "Git URL格式正确")
+    } else {
+        ValidationResult(false, "Git URL格式无效，支持的格式：https://, git://, ssh://, git@host:path")
+    }
+}
+```
+
+**2️⃣ 仓库名称验证**
+```kotlin
+fun validateRepoName(repoName: String): ValidationResult {
+    // 1. 非空检查
+    if (repoName.isBlank()) return ValidationResult(false, "仓库名称不能为空")
+    
+    // 2. 长度限制（最大 255 字符）
+    if (repoName.length > MAX_REPO_NAME_LENGTH) return ValidationResult(false, "仓库名称长度超过限制")
+    
+    // 3. 危险字符检查
+    if (containsDangerousCharacters(repoName)) return ValidationResult(false, "仓库名称包含危险字符")
+    
+    // 4. 路径遍历检查
+    if (containsPathTraversal(repoName)) return ValidationResult(false, "仓库名称包含路径遍历序列")
+    
+    // 5. 有效目录名检查
+    if (!isValidDirectoryName(repoName)) return ValidationResult(false, "仓库名称包含无效字符")
+    
+    return ValidationResult(true, "仓库名称有效")
+}
+```
+
+**3️⃣ 路径安全验证**
+```kotlin
+fun validatePathSafety(basePath: String, userPath: String): ValidationResult {
+    try {
+        val normalizedBase = File(basePath).canonicalPath
+        val normalizedUser = File(basePath, userPath).canonicalPath
+        
+        // 检查用户路径是否在基础路径内
+        if (!normalizedUser.startsWith(normalizedBase)) {
+            return ValidationResult(false, "路径超出允许的范围")
+        }
+        
+        return ValidationResult(true, "路径安全")
+    } catch (e: SecurityException) {
+        return ValidationResult(false, "路径安全检查失败：${e.message}")
+    }
+}
+```
+
+#### B. 输入消毒层
+
+**1️⃣ Git URL 消毒**
+```kotlin
+fun sanitizeGitUrl(url: String): String {
+    return DANGEROUS_CHARS_PATTERN.matcher(url).replaceAll("")
+}
+// 移除：; & | ` $ \n \r \t
+```
+
+**2️⃣ 仓库名称消毒**
+```kotlin
+fun sanitizeRepoName(repoName: String): String {
+    var sanitized = DANGEROUS_CHARS_PATTERN.matcher(repoName).replaceAll("")
+    sanitized = PATH_TRAVERSAL_PATTERN.matcher(sanitized).replaceAll("")
+    sanitized = sanitized.replace(Regex("[<>:\"|?*]"), "_")
+    return sanitized.trim()
+}
+```
+
+#### C. 进程安全执行（GitUtils.kt）
+
+**1️⃣ 参数化命令执行**
+```kotlin
+// ✅ 安全：使用参数数组，避免命令注入
+val processBuilder = ProcessBuilder(
+    "git", "clone",
+    "--config", "http.postBuffer=20971520",
+    "--progress",
+    sanitizedUrl,  // 已消毒的 URL
+    sanitizedRepoName  // 已消毒的仓库名称
+)
+
+// ❌ 危险：字符串拼接，易受命令注入攻击
+val command = "git clone $url $repoName"
+```
+
+**2️⃣ 多层验证**
+```kotlin
+suspend fun cloneRepository(...): GitCloneResult = withContext(Dispatchers.IO) {
+    // 第一层：输入验证
+    val urlValidation = SecurityUtils.validateGitUrl(url)
+    if (!urlValidation.isValid) {
+        return@withContext GitCloneResult(
+            success = false,
+            exitCode = -1,
+            errorMessage = "Git URL验证失败: ${urlValidation.message}",
+            errorType = GitErrorType.UNKNOWN
+        )
+    }
+    
+    // 第二层：仓库名称验证
+    val repoNameValidation = SecurityUtils.validateRepoName(repoName)
+    if (!repoNameValidation.isValid) { ... }
+    
+    // 第三层：路径安全验证
+    val pathSafety = SecurityUtils.validatePathSafety(rootFile.absolutePath, repoName)
+    if (!pathSafety.isValid) { ... }
+    
+    // 第四层：输入消毒
+    val sanitizedUrl = SecurityUtils.sanitizeGitUrl(url)
+    val sanitizedRepoName = SecurityUtils.sanitizeRepoName(repoName)
+    
+    // 执行消毒后的命令
+    // ...
+}
+```
+
+#### D. 协议白名单
+
+```kotlin
+private val ALLOWED_PROTOCOLS = setOf("http", "https", "git", "ssh", "file")
+
+private fun isValidGitUrlFormat(url: String): Boolean {
+    // 正则表达式匹配常见 Git URL 格式
+    val GIT_URL_PATTERN = Pattern.compile(
+        "^(?:" +
+        "(?:https?://[\\w\\-\\.]+(?:\\:\\d+)?/[\\w\\-\\./~]+(?:\\.git)?)" +
+        "|" +
+        "(?:git://[\\w\\-\\.]+(?:\\:\\d+)?/[\\w\\-\\./~]+(?:\\.git)?)" +
+        "|" +
+        "(?:git@[\\w\\-\\.]+:[\\w\\-\\./~]+(?:\\.git)?)" +
+        "|" +
+        "(?:ssh://(?:[\\w\\-\\.]+@)?[\\w\\-\\.]+(?:\\:\\d+)?/[\\w\\-\\./~]+(?:\\.git)?)" +
+        "|" +
+        "(?:file:///[\\w\\-\\./~]+(?:\\.git)?)" +
+        ")\$"
+    )
+    
+    return GIT_URL_PATTERN.matcher(url).matches()
+}
+```
+
+### 11.3 安全测试
+
+#### A. 单元测试覆盖
+
+**SecurityUtilsTest.kt** - 验证所有安全功能
+```kotlin
+@Test
+fun testValidateGitUrlValidUrls() { ... }  // 测试有效 URL
+
+@Test
+fun testValidateGitUrlInvalidUrls() { ... }  // 测试无效 URL（包含攻击向量）
+
+@Test
+fun testValidateGitUrlDangerousCharacters() { ... }  // 测试命令注入防护
+
+@Test
+fun testValidatePathSafety() { ... }  // 测试路径遍历防护
+```
+
+**GitUtilsSecurityTest.kt** - 验证 Git 操作安全
+```kotlin
+@Test
+fun testCloneRepositorySecurityValidation() { ... }  // 测试克隆操作的安全验证
+
+@Test
+fun testCloneRepositoryPathSafety() { ... }  // 测试路径安全
+
+@Test
+fun testCloneRepositoryInputSanitization() { ... }  // 测试输入消毒
+```
+
+#### B. 测试用例示例
+
+| 攻击向量 | 测试输入 | 预期结果 |
+|----------|----------|----------|
+| **命令注入** | `https://example.com/repo.git; rm -rf /` | 验证失败，错误信息包含"危险字符" |
+| **路径遍历** | `../../../etc/passwd` | 验证失败，错误信息包含"路径遍历" |
+| **超长输入** | `"a".repeat(3000)` | 验证失败，错误信息包含"长度超过限制" |
+| **无效协议** | `javascript:alert('xss')` | 验证失败，错误信息包含"格式无效" |
+| **混合攻击** | `git@host:repo.git && cat /etc/passwd` | 验证失败，错误信息包含"危险字符" |
+
+### 11.4 安全配置
+
+#### A. 长度限制配置
+```kotlin
+private const val MAX_URL_LENGTH = 2048  // 符合 HTTP 规范
+private const val MAX_REPO_NAME_LENGTH = 255  // 文件系统限制
+```
+
+#### B. 协议白名单
+```kotlin
+private val ALLOWED_PROTOCOLS = setOf("http", "https", "git", "ssh", "file")
+// 排除：javascript, data, ftp, smb 等危险协议
+```
+
+#### C. 危险字符模式
+```kotlin
+private val DANGEROUS_CHARS_PATTERN = Pattern.compile("[;&|`\$\\n\\r\\t]")
+// 防止命令注入的字符：分号、与号、管道、反引号、美元符号、换行符
+```
+
+#### D. 路径遍历模式
+```kotlin
+private val PATH_TRAVERSAL_PATTERN = Pattern.compile("\\.\\.(/|\\\\)")
+// 匹配：../ 和 ..\
+```
+
+### 11.5 安全最佳实践
+
+#### 1. 防御深度原则
+- **第1层**：UI 层验证（GitRepoSection.kt）
+- **第2层**：业务逻辑验证（GitUtils.kt）
+- **第3层**：系统层防护（文件系统权限）
+
+#### 2. 最小权限原则
+- 使用用户级权限执行 Git 命令
+- 限制文件系统访问范围
+- 避免使用 root/管理员权限
+
+#### 3. 输入消毒优先
+- 始终消毒用户输入，即使已经验证
+- 消毒后再次验证，确保消毒未破坏格式
+
+#### 4. 错误信息安全
+- 不泄露系统内部信息
+- 提供用户友好的错误提示
+- 记录详细错误到日志，但不暴露给用户
+
+#### 5. 定期安全审查
+- 检查依赖库的安全漏洞
+- 更新安全规则和模式
+- 进行渗透测试
+
+### 11.6 安全审计要点
+
+| 检查项 | 检查方法 | 通过标准 |
+|--------|----------|----------|
+| **命令注入防护** | 尝试在 URL 中嵌入 `; ls` | 命令被拒绝，无副作用 |
+| **路径遍历防护** | 尝试访问 `../../../etc/passwd` | 路径被限制在项目目录内 |
+| **缓冲区溢出防护** | 输入 10KB 的 URL | 被长度限制拒绝 |
+| **协议白名单** | 尝试使用 `javascript:` 协议 | 被协议验证拒绝 |
+| **并发安全** | 同时发起多个恶意请求 | 无竞态条件，资源正确清理 |
+
+### 11.7 应急响应
+
+#### 发现安全漏洞时：
+1. **立即隔离**：停止受影响的功能
+2. **评估影响**：确定漏洞范围和潜在损害
+3. **修复漏洞**：应用安全补丁
+4. **验证修复**：运行安全测试套件
+5. **更新文档**：记录漏洞和修复措施
+
+#### 安全事件报告：
+- 记录攻击向量和 payload
+- 分析攻击路径和成功原因
+- 改进防护措施
+- 考虑通知受影响用户
+
+---
+
+## 12. CloneStep 并发改造总结
+
+### 12.1 改造目标
 
 **问题**：原始 CloneStep 采用顺序执行，每个仓库克隆完才能开始下一个，导致性能低下
 

@@ -1,5 +1,6 @@
 package com.songwh.bosprojectinit.utils
 
+import com.songwh.bosprojectinit.MessageBundle
 import com.intellij.util.io.awaitExit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.coroutineScope
@@ -73,7 +74,9 @@ class GitUtils(private val isCancelled: AtomicBoolean) {
      * 例如: https://github.com/user/my-repo.git -> my-repo
      */
     fun extractRepoName(url: String): String {
-        return url.substringAfterLast("/").substringBefore(".git")
+        val repoName = url.substringAfterLast("/").substringBefore(".git")
+        // 消毒仓库名称，确保安全
+        return SecurityUtils.sanitizeRepoName(repoName)
     }
 
     /**
@@ -92,14 +95,50 @@ class GitUtils(private val isCancelled: AtomicBoolean) {
         onProgress: suspend (phase: String, percent: Int) -> Unit,
         taskId: String? = null  // ✅ 新增：任务标识，支持并发
     ): GitCloneResult = withContext(Dispatchers.IO) {
+        // 安全验证：验证URL和仓库名称
+        val urlValidation = SecurityUtils.validateGitUrl(url)
+        if (!urlValidation.isValid) {
+            return@withContext GitCloneResult(
+                success = false,
+                exitCode = -1,
+                errorMessage = MessageBundle.message("error.giturl.validation.failed", urlValidation.message),
+                errorType = GitErrorType.UNKNOWN
+            )
+        }
+        
+        val repoNameValidation = SecurityUtils.validateRepoName(repoName)
+        if (!repoNameValidation.isValid) {
+            return@withContext GitCloneResult(
+                success = false,
+                exitCode = -1,
+                errorMessage = MessageBundle.message("error.reponame.validation.failed", repoNameValidation.message),
+                errorType = GitErrorType.UNKNOWN
+            )
+        }
+        
+        // 安全验证：检查路径安全性（使用canonicalPath确保跨平台一致性）
+        val pathSafety = SecurityUtils.validatePathSafety(rootFile.canonicalPath, repoName)
+        if (!pathSafety.isValid) {
+            return@withContext GitCloneResult(
+                success = false,
+                exitCode = -1,
+                errorMessage = MessageBundle.message("error.path.safety.validation.failed", pathSafety.message),
+                errorType = GitErrorType.UNKNOWN
+            )
+        }
+        
+        // 消毒输入
+        val sanitizedUrl = SecurityUtils.sanitizeGitUrl(url)
+        val sanitizedRepoName = SecurityUtils.sanitizeRepoName(repoName)
+        
         val processBuilder = ProcessBuilder(
             "git", "clone",
             // "--depth", "1",// 浅克隆，不要
             "--config", "http.postBuffer=20971520",         // 设置缓冲区20M
             "--progress",          // 强制输出进度信息，即使是非交互模式
             // "--single-branch",     // 只拉取当前分支
-            url,
-            repoName
+            sanitizedUrl,
+            sanitizedRepoName
         )
         processBuilder.directory(rootFile)
         processBuilder.redirectErrorStream(true) // 合并标准输出和标准错误流

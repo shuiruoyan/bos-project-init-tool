@@ -19,11 +19,13 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.intellij.ide.util.PropertiesComponent
+import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.Messages
 import com.songwh.bosprojectinit.MessageBundle
 import com.songwh.bosprojectinit.logic.ProjectInitializer
 import com.songwh.bosprojectinit.model.ProjectInitState
+import com.songwh.bosprojectinit.settings.LanguageChangeListener
 import com.songwh.bosprojectinit.ui.components.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -34,6 +36,8 @@ import org.jetbrains.jewel.ui.component.Text
 import org.jetbrains.skia.Bitmap
 import org.jetbrains.skia.Image
 import java.io.File
+import java.time.LocalTime
+import java.time.format.DateTimeFormatter
 
 private const val STORAGE_KEY_ROOT_PATH = "com.songwh.bosprojectinit.rootPath"
 private const val STORAGE_KEY_GIT_URLS = "com.songwh.bosprojectinit.gitUrls"
@@ -50,6 +54,24 @@ fun ProjectInitView(
 ) {
     // 使用 IntelliJ 提供的 PropertiesComponent 进行数据持久化，保存上次输入的路径和地址
     val propertiesComponent = remember(project) { PropertiesComponent.getInstance(project) }
+    
+    // 语言变化触发器，用于强制重组界面
+    var languageVersion by remember { mutableStateOf(0) }
+    
+    // 监听语言变化事件
+    DisposableEffect(Unit) {
+        val connection = ApplicationManager.getApplication().messageBus.connect()
+        connection.subscribe(LanguageChangeListener.TOPIC, object : LanguageChangeListener {
+            override fun languageChanged(newLanguage: String) {
+                // 语言变化时，增加版本号触发重组
+                languageVersion++
+            }
+        })
+        
+        onDispose {
+            connection.disconnect()
+        }
+    }
     
     // UI 统一状态管理
     var state by remember { 
@@ -92,6 +114,8 @@ fun ProjectInitView(
     val backgroundColor = JewelTheme.globalColors.panelBackground
 
     // 根布局采用 Box 以便放置帮助 Overlay
+    // 使用 key 参数，当语言变化时强制重新渲染
+    key(languageVersion) {
     Box(modifier = Modifier.fillMaxSize()) {
         Column(
             modifier = Modifier
@@ -242,6 +266,7 @@ fun ProjectInitView(
             HelpOverlay(backgroundColor, onDismiss = { showHelp = false })
         }
     }
+    }
 }
 
 /**
@@ -255,11 +280,46 @@ private fun handleStartClick(
     onStateUpdate: (ProjectInitState) -> Unit,
     onInitializerUpdate: (ProjectInitializer?) -> Unit
 ) {
+    // 检查是否存在不合格的Git地址
+    val invalidUrls = GitRepoSection.getInvalidGitUrls(state.gitUrls)
+    
+    // 用于后续使用的实际状态（可能是清理后的）
+    var actualState = state
+    
+    if (invalidUrls.isNotEmpty()) {
+        // 构建不合格地址的列表显示
+        val invalidUrlsList = invalidUrls.joinToString("\n") { "  • $it" }
+        
+        val result = Messages.showDialog(
+            project,
+            MessageBundle.message("dialog.invalid.urls.message", invalidUrlsList),
+            MessageBundle.message("dialog.invalid.urls.title"),
+            arrayOf(
+                MessageBundle.message("dialog.invalid.urls.delete.continue"),
+                MessageBundle.message("dialog.invalid.urls.cancel")
+            ),
+            0, // 默认选中第一个按钮
+            Messages.getWarningIcon()
+        )
+        
+        if (result == 0) {
+            // 用户选择"删除并继续"，移除无效地址
+            val cleanedUrls = GitRepoSection.removeInvalidGitUrls(state.gitUrls)
+            actualState = state.copy(gitUrls = cleanedUrls)
+            onStateUpdate(actualState)
+            // 持久化清理后的URL
+            propertiesComponent.setValue(STORAGE_KEY_GIT_URLS, cleanedUrls)
+        } else {
+            // 用户选择"取消"，不执行初始化
+            return
+        }
+    }
+    
     // 如果开启了清理选项，先弹窗提示用户确认
-    val shouldStart = if (state.cleanProjectsBeforeClone) {
+    val shouldStart = if (actualState.cleanProjectsBeforeClone) {
         Messages.showYesNoDialog(
             project,
-            MessageBundle.message("dialog.clean.confirm.message", state.rootPath),
+            MessageBundle.message("dialog.clean.confirm.message", actualState.rootPath),
             MessageBundle.message("dialog.clean.confirm.title"),
             MessageBundle.message("dialog.clean.confirm.ok"),
             MessageBundle.message("dialog.clean.confirm.cancel"),
@@ -271,16 +331,16 @@ private fun handleStartClick(
 
     if (shouldStart) {
         // 1. 持久化当前输入的有效参数，方便下次开启
-        propertiesComponent.setValue(STORAGE_KEY_ROOT_PATH, state.rootPath)
-        propertiesComponent.setValue(STORAGE_KEY_GIT_URLS, state.gitUrls)
+        propertiesComponent.setValue(STORAGE_KEY_ROOT_PATH, actualState.rootPath)
+        propertiesComponent.setValue(STORAGE_KEY_GIT_URLS, actualState.gitUrls)
 
         // 2. 初始化本地 UI 状态
-        var updatedState = state.copy(
+        var updatedState = actualState.copy(
             isRunning = true,
             progress = 0f,
             statusText = MessageBundle.message("log.init.start"),
             logLines = listOf(
-                MessageBundle.message("log.entry.format", java.time.LocalTime.now().format(java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss")), MessageBundle.message("log.system"), 0, MessageBundle.message("log.init.start"))
+                MessageBundle.message("log.entry.format", LocalTime.now().format(DateTimeFormatter.ofPattern("HH:mm:ss")), MessageBundle.message("log.system"), 0, MessageBundle.message("log.init.start"))
             ),
             successCount = 0,
             failureCount = 0
@@ -288,8 +348,8 @@ private fun handleStartClick(
         onStateUpdate(updatedState)
 
         // 3. 执行启动前的合法性预检查
-        val rootFile = File(state.rootPath)
-        if (state.rootPath.isBlank() || !rootFile.exists() || !rootFile.isDirectory) {
+        val rootFile = File(actualState.rootPath)
+        if (actualState.rootPath.isBlank() || !rootFile.exists() || !rootFile.isDirectory) {
             Messages.showErrorDialog(project, MessageBundle.message("error.invalid.path"), MessageBundle.message("error.title"))
             onStateUpdate(updatedState.copy(isRunning = false))
             return
@@ -301,7 +361,7 @@ private fun handleStartClick(
         }
         
         // 归一化 URL 列表，过滤掉空行和重复项
-        val uniqueUrls = GitRepoSection.normalizeGitUrls(state.gitUrls)
+        val uniqueUrls = GitRepoSection.normalizeGitUrls(actualState.gitUrls)
             .split("\n")
             .map { it.trim() }
             .filter { it.isNotBlank() }
@@ -323,10 +383,10 @@ private fun handleStartClick(
         scope.launch(Dispatchers.Default) {
             try {
                 newInitializer.initialize(
-                    state.rootPath,
+                    actualState.rootPath,
                     uniqueUrls,
                     timeout,
-                    state.cleanProjectsBeforeClone,
+                    actualState.cleanProjectsBeforeClone,
                     onProgress = { p, status ->
                         withContext(Dispatchers.Main) {
                             updatedState = updatedState.copy(progress = p, statusText = status)

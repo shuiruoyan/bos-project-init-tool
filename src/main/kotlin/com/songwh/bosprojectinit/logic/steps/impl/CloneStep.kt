@@ -312,13 +312,13 @@ class CloneStep(
                         if (percent > maxRepoPercent) {
                             maxRepoPercent = percent
                         }
-                        
+
                         // ✅ 更新当前仓库的进度
                         repoProgressMap.computeIfAbsent(index) { AtomicInteger(0) }.set(maxRepoPercent)
-                        
+
                         // ✅ 更新总体进度（线程安全）
                         updateGlobalProgress(context, stepIndex, totalSteps, totalRepos, repoName, phase, percent)
-                        
+
                         try {
                             updateLog(
                                 url,

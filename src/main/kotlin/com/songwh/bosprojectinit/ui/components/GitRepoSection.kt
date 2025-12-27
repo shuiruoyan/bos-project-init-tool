@@ -24,6 +24,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
 import com.songwh.bosprojectinit.MessageBundle
 import com.songwh.bosprojectinit.ui.Typography
+import com.songwh.bosprojectinit.utils.SecurityUtils
 import org.jetbrains.jewel.ui.component.Text
 
 /**
@@ -51,6 +52,26 @@ object GitRepoSection {
             .filter { isValidGitUrl(it) }
             .distinct()
             .size
+    }
+
+    /**
+     * 从文本中提取所有无效的Git地址
+     */
+    fun getInvalidGitUrls(text: String): List<String> {
+        return text.split("\n")
+            .map { it.trim() }
+            .filter { it.isNotBlank() && !isValidGitUrl(it) }
+            .distinct()
+    }
+
+    /**
+     * 移除文本中的无效Git地址，保留有效地址
+     */
+    fun removeInvalidGitUrls(text: String): String {
+        return text.split("\n")
+            .map { it.trim() }
+            .filter { it.isBlank() || isValidGitUrl(it) }
+            .joinToString("\n")
     }
 
     @Composable
@@ -99,13 +120,9 @@ object GitRepoSection {
             // 使用 BasicTextField 以便获得更灵活的定制外观
             BasicTextField(
                 value = gitUrls,
-                onValueChange = {
-                    val normalized = normalizeGitUrls(it)
-                    if (normalized != gitUrls) {
-                        onGitUrlsChange(normalized)
-                    } else {
-                        onGitUrlsChange(it)
-                    }
+                onValueChange = { 
+                    // 不再实时过滤，保留用户输入的所有内容
+                    onGitUrlsChange(it)
                 },
                 modifier = Modifier
                     .fillMaxWidth()
@@ -131,6 +148,12 @@ object GitRepoSection {
      * 判断一行文本是否为潜在的 Git 地址
      */
     private fun isValidGitUrl(line: String): Boolean {
-        return line.isNotBlank() && (line.startsWith("http") || line.startsWith("git@") || line.endsWith(".git"))
+        if (line.isBlank()) {
+            return false
+        }
+        
+        // 使用安全工具进行验证
+        val validationResult = SecurityUtils.validateGitUrl(line)
+        return validationResult.isValid
     }
 }
