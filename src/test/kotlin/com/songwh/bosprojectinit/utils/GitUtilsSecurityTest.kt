@@ -24,20 +24,14 @@ class GitUtilsSecurityTest {
         assertEquals("repo_name", gitUtils.extractRepoName("https://github.com/user/repo:name.git"))
     }
 
+    @Test
     fun testCloneRepositorySecurityValidation() = runBlocking {
         val gitUtils = GitUtils(AtomicBoolean(false))
         val tempDir = kotlin.io.createTempDir("security-test")
         
         try {
-            // 测试1: 有效的URL和仓库名称
-            val validResult = gitUtils.cloneRepository(
-                url = "https://github.com/user/valid-repo.git",
-                repoName = "valid-repo",
-                rootFile = tempDir,
-                onProgress = { _, _ -> }
-            )
-            // 注意：由于是测试环境，可能没有git命令，所以可能失败
-            // 我们主要关心验证逻辑是否执行
+            // 跳过测试1: 有效的URL测试（避免依赖真实的git命令和网络）
+            // 我们主要测试安全验证逻辑，而不是git克隆功能本身
             
             // 测试2: 包含命令注入的URL（应该被拒绝）
             val injectionResult = gitUtils.cloneRepository(
@@ -87,26 +81,28 @@ class GitUtilsSecurityTest {
         }
     }
 
+    @Test
     fun testCloneRepositoryPathSafety() = runBlocking {
         val gitUtils = GitUtils(AtomicBoolean(false))
         val tempDir = kotlin.io.createTempDir("security-test")
         
         try {
-            // 创建子目录作为根目录
+            // 使用canonicalPath确保跨平台一致性
             val rootDir = File(tempDir, "root").apply { mkdirs() }
+            val canonicalRootDir = rootDir.canonicalFile
             
             // 测试路径安全性：尝试克隆到根目录之外
             val unsafeResult = gitUtils.cloneRepository(
                 url = "https://github.com/user/repo.git",
                 repoName = "../../../etc/passwd",
-                rootFile = rootDir,
+                rootFile = canonicalRootDir,
                 onProgress = { _, _ -> }
             )
             
             assertFalse(unsafeResult.success, "路径遍历攻击应该被拒绝")
             assertTrue(unsafeResult.errorMessage.contains("路径安全检查失败") || 
                       unsafeResult.errorMessage.contains("仓库名称验证失败"),
-                      "应该返回路径安全错误信息")
+                      "应该返回路径安全错误信息, actual: ${unsafeResult.errorMessage}")
             
         } finally {
             tempDir.deleteRecursively()

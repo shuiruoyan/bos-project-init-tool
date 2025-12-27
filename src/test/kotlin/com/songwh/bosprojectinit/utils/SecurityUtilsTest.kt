@@ -151,7 +151,7 @@ class SecurityUtilsTest {
         // 创建临时目录进行测试
         val tempDir = kotlin.io.createTempDir("security-test")
         try {
-            val basePath = tempDir.absolutePath
+            val basePath = tempDir.canonicalPath
             
             // 安全路径
             val safeResult = SecurityUtils.validatePathSafety(basePath, "subdir/repo")
@@ -161,15 +161,16 @@ class SecurityUtilsTest {
             val unsafeResult = SecurityUtils.validatePathSafety(basePath, "../../etc/passwd")
             assertFalse(unsafeResult.isValid, "路径遍历应该被拒绝: ${unsafeResult.message}")
             
-            // 绝对路径（应该失败） - 在Windows上，/etc/passwd可能被解析为相对路径
-            // 使用明确的绝对路径测试
-            val absolutePath = if (System.getProperty("os.name").contains("Windows", ignoreCase = true)) {
-                "C:\\Windows\\System32"
-            } else {
-                "/etc/passwd"
+            // 测试绝对路径（应该失败）
+            // 创建一个确定在basePath之外的绝对路径
+            val outsideDir = kotlin.io.createTempDir("security-test-outside")
+            try {
+                val absolutePath = outsideDir.canonicalPath
+                val absoluteResult = SecurityUtils.validatePathSafety(basePath, absolutePath)
+                assertFalse(absoluteResult.isValid, "basePath外部的绝对路径应该被拒绝: ${absoluteResult.message}")
+            } finally {
+                outsideDir.deleteRecursively()
             }
-            val absoluteResult = SecurityUtils.validatePathSafety(basePath, absolutePath)
-            assertFalse(absoluteResult.isValid, "绝对路径应该被拒绝: ${absoluteResult.message}")
         } finally {
             tempDir.deleteRecursively()
         }

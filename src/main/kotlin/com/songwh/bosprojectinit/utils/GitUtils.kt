@@ -116,8 +116,8 @@ class GitUtils(private val isCancelled: AtomicBoolean) {
             )
         }
         
-        // 安全验证：检查路径安全性
-        val pathSafety = SecurityUtils.validatePathSafety(rootFile.absolutePath, repoName)
+        // 安全验证：检查路径安全性（使用canonicalPath确保跨平台一致性）
+        val pathSafety = SecurityUtils.validatePathSafety(rootFile.canonicalPath, repoName)
         if (!pathSafety.isValid) {
             return@withContext GitCloneResult(
                 success = false,
