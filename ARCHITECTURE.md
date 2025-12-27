@@ -695,7 +695,7 @@ failureCount.incrementAndGet()
 2. 每个日志更新都会触发 `emitLogs(onLogUpdate)`
 3. UI 在 `LaunchedEffect` 中自动刷新
 
-### Q: 进度条跳跃不連贯？
+### Q: 进度条跳跃不连贯？
 **A**: 
 1. 使用加权进度计算，确保平滑性
 2. `coerceIn(0f, 1f)` 防止越界
@@ -1045,7 +1045,7 @@ private val PATH_TRAVERSAL_PATTERN = Pattern.compile("\\.\\.(/|\\\\)")
 
 **解决方案**：实现并发克隆，同时处理最多 3 个仓库，性能提升 3-4 倍
 
-### 11.2 核心改进
+### 12.2 核心改进
 
 #### A. GitUtils.kt 改造
 
@@ -1070,7 +1070,7 @@ suspend fun cloneRepository(
 ): GitCloneResult
 ```
 
-**3️⃣ 详细的错误信息**
+**3️⃣ 错误信息（当前实现现状）**
 ```kotlin
 data class GitCloneResult(
     val success: Boolean,
@@ -1080,23 +1080,11 @@ data class GitCloneResult(
 )
 
 enum class GitErrorType {
-    NETWORK_TIMEOUT,
-    PERMISSION_DENIED,
-    REPO_NOT_FOUND,
-    DISK_FULL,
-    AUTH_FAILED,
     UNKNOWN
 }
 ```
 
-**4️⃣ 错误分析函数**
-```kotlin
-// ✅ 解析详细的错误消息
-fun parseGitErrorMessage(output: String, exitCode: Int): String { ... }
-
-// ✅ 分类错误类型
-fun classifyGitError(errorMessage: String, exitCode: Int): GitErrorType { ... }
-```
+说明：目前代码侧 `GitErrorType` 仅保留 `UNKNOWN`，并未实现输出解析与错误分类函数；如需要更强诊断能力，可在此基础上扩展。
 
 #### B. CloneStep.kt 改造
 
@@ -1104,30 +1092,24 @@ fun classifyGitError(errorMessage: String, exitCode: Int): GitErrorType { ... }
 ```kotlin
 private suspend fun processRepositories(...): StepResult = coroutineScope {
     val maxConcurrentRepos = minOf(3, totalRepos)  // 限制并发数
-    
-    // 批次执行：每批最多 3 个仓库
-    val repoSlices = context.urls.chunked(maxConcurrentRepos)
-    
-    for (batch in repoSlices) {
-        // ✅ 使用 async 并发执行每个仓库
-        val batchTasks = batch.map { (actualIndex, url) ->
-            async { processSingleRepository(...) }
+    val semaphore = Semaphore(maxConcurrentRepos)
+
+    // ✅ 滑动窗口并发：有任务完成就会释放 permit，立刻启动下一个仓库
+    val tasks = context.urls.mapIndexed { index, url ->
+        async {
+            semaphore.withPermit {
+                processSingleRepository(..., taskId = "clone_${index}_${url.hashCode()}")
+            }
         }
-        val batchResults = batchTasks.awaitAll()
-        results.addAll(batchResults)
     }
+    tasks.awaitAll()
 }
 ```
 
-**2️⃣ 全局超时 + 动态单仓库超时**
-```kotlin
-val globalTimeoutMs = context.timeoutSeconds * 1000 * totalRepos / 2
-val remainingTime = globalTimeoutMs - (System.currentTimeMillis() - globalStartTime)
-val perRepoTimeout = minOf(
-    remainingTime.coerceAtLeast(10_000L),  // 至少 10 秒
-    context.timeoutSeconds * 1000
-)
-```
+**2️⃣ 超时策略（当前实现现状）**
+
+- 单仓库超时严格使用用户输入的 `timeoutSeconds`
+- 每个仓库克隆任务用 `withTimeout(perRepoTimeout)` 包裹
 
 **3️⃣ 文件删除重试机制**
 ```kotlin
@@ -1148,21 +1130,15 @@ private suspend fun cleanupInvalidDirectory(
 }
 ```
 
-**4️⃣ 详细的错误日志**
+**4️⃣ 错误日志（当前实现现状）**
 ```kotlin
-// ❌ 旧：只有错误码
-updateLog(url, MessageBundle.message("log.clone.failed", exitCode, url), 0)
-
-// ✅ 新：包含详细的错误描述
-val errorMsg = if (cloneResult.errorMessage.isNotEmpty()) {
-    cloneResult.errorMessage
-} else {
+val errorMsg = cloneResult.errorMessage.ifEmpty {
     "克隆失败: 退出码 ${cloneResult.exitCode}"
 }
-updateLog(url, MessageBundle.message("log.clone.failed", exitCode, errorMsg), 0)
+updateLog(url, MessageBundle.message("log.clone.failed", cloneResult.exitCode, errorMsg), 0)
 ```
 
-### 11.3 性能对比
+### 12.3 性能对比
 
 | 场景 | 原始（顺序） | 改造后（并发） | 性能提升 |
 |------|------------|--------------|--------|
@@ -1171,23 +1147,23 @@ updateLog(url, MessageBundle.message("log.clone.failed", exitCode, errorMsg), 0)
 | 10 个仓库 × 30s | 300s | 120s | **2.5 倍** |
 | 20 个仓库 × 30s | 600s | 210s | **2.9 倍** |
 
-### 11.4 可靠性改进
+### 12.4 可靠性改进
 
 | 方面 | 改进 |
 |------|------|
 | **线程安全** | AtomicReference 替代可变变量，ConcurrentHashMap 管理并发任务 |
-| **错误诊断** | 详细的错误信息（网络超时 vs 权限拒绝 vs 仓库不存在） |
+| **错误诊断** | 支持返回错误信息字符串（`errorMessage`）；可按需扩展错误分类 |
 | **文件清理** | 重试机制 + 指数退避，解决 Windows 文件占用问题 |
-| **超时控制** | 全局超时 + 动态单仓库超时，防止无限等待 |
+| **超时控制** | 单仓库超时（严格使用 `timeoutSeconds`），防止无限等待 |
 | **取消响应** | coroutineScope 自动处理，一个失败不影响其他 |
 
-### 11.5 关键代码位置
+### 12.5 关键代码位置
 
 📁 **GitUtils.kt**（第 1-228 行）
 - 类定义：第 33-100 行
 - 进程管理：第 34-73 行
 - cloneRepository 方法：第 104-186 行
-- 错误分析函数：第 188-228 行
+- 输出进度解析：第 211-226 行
 
 📁 **CloneStep.kt**（第 1-413 行）
 - processRepositories 方法：第 103-181 行（并发框架）
@@ -1195,7 +1171,7 @@ updateLog(url, MessageBundle.message("log.clone.failed", exitCode, errorMsg), 0)
 - performCloneOperation 方法：第 269-325 行（超时设置）
 - cleanupInvalidDirectory 方法：第 240-267 行（重试机制）
 
-### 11.6 测试建议
+### 12.6 测试建议
 
 ✅ **单元测试**
 ```kotlin
@@ -1212,7 +1188,7 @@ updateLog(url, MessageBundle.message("log.clone.failed", exitCode, errorMsg), 0)
 - Windows 文件占用场景
 - 进程异常杀死的清理
 
-### 11.7 向后兼容性
+### 12.7 向后兼容性
 
 ✅ **无破坏性改动**
 - `IProjectInitStep` 接口保持不变
@@ -1224,7 +1200,7 @@ updateLog(url, MessageBundle.message("log.clone.failed", exitCode, errorMsg), 0)
 - 调用者需传入 `taskId` 参数以启用并发管理
 - 无 `taskId` 时仍使用全局进程管理（后向兼容）
 
-### 11.8 未来优化方向
+### 12.8 未来优化方向
 
 1. **动态并发数调整**：根据 CPU 核心数和网络状况自动调整
 2. **进度预测**：根据已完成的仓库预估剩余时间

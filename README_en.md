@@ -1,5 +1,8 @@
 # BOS Project Initialization Assistant
 
+[(中文说明)](README.md)
+[ARCHITECTURE](ARCHITECTURE.md)
+
 This is an IntelliJ IDEA plugin designed for Kingdee BOS platform developers to simplify the BOS project initialization process. Through a graphical interface configuration, it can batch pull multiple Git repositories with one click and automatically complete various configuration tasks required by BOS projects.
 
 ![](src/main/resources/image/help.png)
@@ -23,6 +26,13 @@ This is an IntelliJ IDEA plugin designed for Kingdee BOS platform developers to 
    - Set timeout (optional, default 60 seconds)
    - Choose whether to clear existing projects (optional)
 4. Click the "Initialize" button to start execution
+
+## Prerequisites
+
+- Git CLI is installed and available in `PATH`
+- Target directory has read/write permissions
+- Network access to remote repositories (HTTP/HTTPS/SSH)
+- Git URLs are validated and sanitized (see `SecurityUtils` / `GitUtils`); invalid input will be rejected
 
 ## Project Structure
 
@@ -75,6 +85,11 @@ This is an IntelliJ IDEA plugin designed for Kingdee BOS platform developers to 
 3. **Settings Configuration**: Generate or update settings.gradle file to include all modules
 4. **Build Configuration**: Generate build_local.gradle file for the root project
 5. **Module Configuration**: Generate corresponding build_local.gradle files for each submodule
+
+Notes:
+
+- CloneStep uses concurrent cloning with a limit of 3 repositories at a time (adjustable in code)
+- Per-repository timeout strictly follows the `timeoutSeconds` value from the UI
 
 ## Development Environment
 

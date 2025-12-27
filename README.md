@@ -2,6 +2,8 @@
 
 [English Version](README_en.md)
 
+[ARCHITECTURE](ARCHITECTURE.md)
+
 这是一个为金蝶苍穹平台开发者设计的 IntelliJ IDEA(最低版本2025.2.4) 插件，旨在简化苍穹项目的初始化流程。通过图形化界面配置，可以一键批量拉取多个 Git 仓库，并自动完成苍穹项目所需的各项配置工作。
 
 ![](src/main/resources/image/help.png)
@@ -25,6 +27,13 @@
    - 设置超时时间（可选，默认60秒）
    - 选择是否清空已有项目（可选）
 4. 点击「初始化」按钮开始执行
+
+## 运行前置条件
+
+- 已安装 Git CLI 并添加到 `PATH`
+- 目标目录具有读写权限
+- 能访问远程仓库网络（HTTP/HTTPS/SSH 等）
+- Git URL 会进行安全校验与消毒（见 `SecurityUtils` / `GitUtils`），不合法输入会被拒绝
 
 ## 项目结构
 
@@ -78,6 +87,11 @@
 4. **构建配置**：为根项目生成 build_local.gradle 文件
 5. **模块配置**：为每个子模块生成相应的 build_local.gradle 文件
 
+补充说明：
+
+- CloneStep 当前采用并发克隆，并发上限为 3（可在代码中调整）
+- 单仓库超时严格使用 UI 输入的 `timeoutSeconds`
+
 ## 开发环境
 
 - IntelliJ IDEA 2025.2.4 或更高版本
@@ -107,3 +121,4 @@
 - 确保系统已安装 Git 命令行工具并已添加到 PATH 环境变量中
 - 插件需要访问网络以克隆远程仓库
 - 插件需要对目标目录具有读写权限
+- Git URL 会进行安全校验与消毒（见 `SecurityUtils` / `GitUtils`），不合法输入会被拒绝
