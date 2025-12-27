@@ -2,7 +2,6 @@ package com.songwh.bosprojectinit.utils
 
 import com.intellij.openapi.diagnostic.Logger
 import com.songwh.bosprojectinit.MessageBundle
-import com.songwh.bosprojectinit.logic.steps.impl.CloneStep
 import java.io.File
 import java.net.URI
 import java.net.URISyntaxException
