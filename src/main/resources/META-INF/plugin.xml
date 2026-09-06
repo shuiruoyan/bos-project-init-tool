@@ -19,6 +19,15 @@
             <strong>BOS Project Initialization Assistant</strong> helps you quickly initialize and configure BOS projects from Git repositories.
         </p>
         <p>
+            <strong>How to Use:</strong>
+        </p>
+        <ol>
+            <li>Go to <strong>Tools → BOS Project Initialization Assistant</strong></li>
+            <li>Configure project root path</li>
+            <li>Add Git repository URLs (one per line)</li>
+            <li>Click <strong>Initialize</strong> to start</li>
+        </ol>
+        <p>
             <strong>Key Features:</strong>
         </p>
         <ul>
@@ -30,15 +39,6 @@
             <li>Security validation for Git URLs and paths</li>
             <li>Bilingual support (Chinese/English)</li>
         </ul>
-        <p>
-            <strong>How to Use:</strong>
-        </p>
-        <ol>
-            <li>Go to <strong>Tools → BOS Project Initialization Assistant</strong></li>
-            <li>Configure project root path</li>
-            <li>Add Git repository URLs (one per line)</li>
-            <li>Click <strong>Initialize</strong> to start</li>
-        </ol>
         <p>
             <strong>GitHub:</strong> <a href="https://github.com/shuiruoyan/bos-project-init-tool">https://github.com/shuiruoyan/bos-project-init-tool</a>
         </p>
