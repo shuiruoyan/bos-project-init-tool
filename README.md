@@ -1,124 +1,121 @@
-# 苍穹工程初始化助手 (BOS Project Initialization Assistant)
+# 苍穹工程初始化助手
 
-[English Version](README_en.md)
+[![Version](https://img.shields.io/badge/Version-1.0.0-blue)](CHANGELOG.md)
+[![IntelliJ IDEA](https://img.shields.io/badge/IntelliJ_IDEA-2025.2.4+-orange)](https://www.jetbrains.com/idea/)
 
-[ARCHITECTURE](ARCHITECTURE.md)
+[English](README_en.md) | [架构文档](ARCHITECTURE.md)
 
-这是一个为金蝶苍穹平台开发者设计的 IntelliJ IDEA(最低版本2025.2.4) 插件，旨在简化苍穹项目的初始化流程。通过图形化界面配置，可以一键批量拉取多个 Git 仓库，并自动完成苍穹项目所需的各项配置工作。
+## 简介
 
-![](src/main/resources/image/help.png)
+专为金蝶苍穹（Kingdee BOS）平台开发者设计的 IntelliJ IDEA 插件。通过图形化界面一键批量克隆 Git 仓库，自动完成项目配置，简化初始化流程。
+
+![插件界面预览](src/main/resources/image/help.png)
 
 ## 功能特性
 
-- 🚀 **批量 Git 克隆**：支持一次性拉取多个 Git 仓库
-- ⚙️ **自动化配置**：自动生成或修改苍穹平台所需的配置文件
-- 📊 **可视化界面**：直观的图形化操作界面，实时显示进度和日志
-- ⏱️ **超时控制**：可设置单个仓库拉取的最长等待时间
-- 🧹 **清理选项**：支持在初始化前清空现有项目目录
-- 🛑 **可中断操作**：支持随时取消正在进行的任务
+- **批量克隆**：支持多个仓库（HTTP/HTTPS/SSH）
+- **自动配置**：自动生成和同步 config.gradle、settings.gradle、build_local.gradle
+- **可视化**：实时进度显示、分色日志输出
+- **超时控制**：独立仓库超时设置
+- **清理选项**：初始化前清空目标目录
+- **可中断**：随时暂停/取消任务
 
-## 使用方法
+## 快速开始
 
-1. 在 IntelliJ IDEA 中打开插件
-2. 通过菜单 `工具 -> 苍穹工程初始化助手` 启动插件
-3. 配置以下参数：
-   - 选择苍穹启动工程的根目录
-   - 输入需要拉取的 Git 仓库地址列表（每行一个）
-   - 设置超时时间（可选，默认60秒）
-   - 选择是否清空已有项目（可选）
-4. 点击「初始化」按钮开始执行
+### 安装
 
-## 运行前置条件
+1. `设置` → `插件` → `⚙️` → `Install Plugin from Disk...`
+2. 选择下载的 JAR 文件
+3. 重启 IDEA
 
-- 已安装 Git CLI 并添加到 `PATH`
-- 目标目录具有读写权限
-- 能访问远程仓库网络（HTTP/HTTPS/SSH 等）
-- Git URL 会进行安全校验与消毒（见 `SecurityUtils` / `GitUtils`），不合法输入会被拒绝
+### 使用
+
+1. 菜单：`Tools → 苍穹工程初始化助手`
+2. 配置参数：工程路径、Git 仓库地址、超时时间
+3. 点击 `初始化` 执行
+
+## 配置说明
+
+| 参数 | 说明 | 必填 |
+|------|------|------|
+| 工程路径 | 苍穹项目根目录（存放 projects 子目录） | ✅ |
+| 超时时间 | 单个仓库克隆超时（秒），默认 60 | ❌ |
+| Git 仓库地址 | 需要克隆的仓库地址，每行一个 | ✅ |
+| 清空选项 | 初始化前清空目标目录 | ❌ |
+
+
 
 ## 项目结构
 
 ```
-.
-├── src/main/kotlin/com/songwh/bosprojectinit/
-│   ├── actions/                 # IDEA 动作入口
-│   │   └── ProjectInitAction.kt # 插件主入口动作
-│   ├── logic/                   # 核心业务逻辑
-│   │   ├── steps/               # 初始化步骤定义
-│   │   │   ├── impl/            # 具体步骤实现
-│   │   │   │   ├── CloneStep.kt           # 克隆仓库步骤
-│   │   │   │   ├── ConfigGradleStep.kt    # 同步 config.gradle 步骤
-│   │   │   │   ├── SettingsStep.kt        # 配置 settings.gradle 步骤
-│   │   │   │   ├── BuildLocalStep.kt      # 生成根目录 build_local.gradle 步骤
-│   │   │   │   └── ModuleBuildLocalStep.kt # 生成模块 build_local.gradle 步骤
-│   │   │   └── IProjectInitStep.kt        # 步骤接口定义
-│   │   └── ProjectInitializer.kt          # 项目初始化器核心类
-│   ├── model/                             # 数据模型
-│   │   └── InitializationModels.kt        # 各种数据模型定义
-│   ├── ui/                                # 用户界面
-│   │   ├── components/                    # UI 组件
-│   │   ├── ProjectInitDialog.kt           # 初始化对话框容器
-│   │   ├── ProjectInitView.kt             # 初始化主视图
-│   │   └── Typography.kt                  # 字体样式定义
-│   ├── utils/                             # 工具类
-│   │   └── GitUtils.kt                    # Git 操作工具类
-│   ├── BosProjectInitTool.kt              # 工具窗口实现
-│   └── MessageBundle.kt                   # 国际化消息束
-│
+bos-project-init/
+├── src/main/kotlin/
+│   ├── actions/           # 插件入口
+│   ├── logic/             # 核心业务逻辑
+│   │   └── steps/         # 初始化步骤实现
+│   ├── model/             # 数据模型
+│   ├── settings/          # 插件设置
+│   ├── ui/                # 用户界面
+│   │   └── components/    # UI组件
+│   └── utils/             # 工具类
 ├── src/main/resources/
-│   ├── messages/                          # 多语言资源文件
-│   │   ├── MessageBundle.properties       # 默认语言包（中文）
-│   │   ├── MessageBundle_en_US.properties # 英文语言包
-│   │   └── MessageBundle_zh_CN.properties # 中文语言包
-│   ├── image/                             # 图片资源
-│   │   └── help.png                       # 帮助图片
-│   └── META-INF/
-│       └── plugin.xml                     # 插件配置文件
-│
-├── build.gradle.kts                       # Gradle 构建脚本
-├── settings.gradle.kts                    # Gradle 设置文件
-└── gradle.properties                      # Gradle 属性配置
+│   ├── messages/          # 多语言资源
+│   ├── image/             # 图片资源
+│   └── META-INF/          # 插件配置
+├── src/test/kotlin/       # 测试代码
+├── build.gradle.kts       # Gradle构建脚本
+└── README.md              # 项目说明
 ```
 
-## 核心工作流程
+## 工作流程
 
-1. **代码克隆**：根据用户提供的 Git 地址列表，批量克隆到指定的 projects 目录
-2. **配置同步**：同步 config.gradle 配置文件
-3. **设置配置**：生成或更新 settings.gradle 文件以包含所有模块
-4. **构建配置**：为根项目生成 build_local.gradle 文件
-5. **模块配置**：为每个子模块生成相应的 build_local.gradle 文件
+1. **环境检查**：验证 Git 安装和目录权限
+2. **参数校验**：校验 Git URL 格式和路径
+3. **清理目录**：可选清空目标目录
+4. **克隆仓库**：克隆多个仓库到 projects 目录
+5. **配置同步**：自动生成 config.gradle、settings.gradle、build_local.gradle
+6. **结果汇总**：输出执行报告
 
-补充说明：
+## 常见问题
 
-- CloneStep 当前采用并发克隆，并发上限为 3（可在代码中调整）
-- 单仓库超时严格使用 UI 输入的 `timeoutSeconds`
+**Git 未找到**
+- 确认已安装 Git 并添加到系统 PATH
+- 重启 IDEA
+
+**权限被拒绝**
+- 检查目标目录权限
+- 确保当前用户有读写权限
+
+**网络超时**
+- 增加超时时间（120-300 秒）
+- 检查网络连接
+- 确认仓库地址和访问权限
+
+**URL 校验失败**
+- 确保 URL 格式正确（支持 https://, http://, git@）
+- 检查 URL 是否包含非法字符
+
+**SSH 认证失败**
+- 确保 SSH 密钥已添加到 Git 服务器
+- 或使用 HTTPS 协议
+
+**模块未识别**
+- 手动刷新 Gradle 项目
+- 运行 `./gradlew projects` 查看模块
 
 ## 开发环境
 
-- IntelliJ IDEA 2025.2.4 或更高版本
-- JDK 21
-- Kotlin 2.1.20
-- Gradle 8.x
-
-## 构建和运行
-
-```bash
-# 构建插件
-./gradlew buildPlugin
-
-# 运行插件进行测试
-./gradlew runIde
-```
+| 组件 | 要求 |
+|------|------|
+| IntelliJ IDEA | 2025.2.4+ |
+| JDK | 21+ |
+| Kotlin | 2.1.20 |
+| Gradle | 8.x |
 
 ## 技术栈
 
 - Kotlin
 - Compose UI for IntelliJ
-- Coroutines
-- Git 命令行工具
-
-## 注意事项
-
-- 确保系统已安装 Git 命令行工具并已添加到 PATH 环境变量中
-- 插件需要访问网络以克隆远程仓库
-- 插件需要对目标目录具有读写权限
-- Git URL 会进行安全校验与消毒（见 `SecurityUtils` / `GitUtils`），不合法输入会被拒绝
+- Kotlin Coroutines
+- Git CLI
+- IntelliJ Platform SDK

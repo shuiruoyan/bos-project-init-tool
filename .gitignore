@@ -3,3 +3,5 @@ out/
 .kotlin/
 bos-project-init.iml
 .output.txt
+bin/
+.vscode/

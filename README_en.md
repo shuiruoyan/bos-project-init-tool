@@ -1,122 +1,120 @@
 # BOS Project Initialization Assistant
 
-[(中文说明)](README.md)
-[ARCHITECTURE](ARCHITECTURE.md)
+[![Version](https://img.shields.io/badge/Version-1.0.0-blue)](CHANGELOG.md)
+[![IntelliJ IDEA](https://img.shields.io/badge/IntelliJ_IDEA-2025.2.4+-orange)](https://www.jetbrains.com/idea/)
 
-This is an IntelliJ IDEA plugin designed for Kingdee BOS platform developers to simplify the BOS project initialization process. Through a graphical interface configuration, it can batch pull multiple Git repositories with one click and automatically complete various configuration tasks required by BOS projects.
+[(中文说明)](README.md) | [Architecture](ARCHITECTURE.md)
 
-![](src/main/resources/image/help.png)
+## Introduction
+
+An IntelliJ IDEA plugin designed for Kingdee BOS platform developers. Simplify project initialization with one-click batch Git repository cloning and automatic configuration through a graphical interface.
+
+![Plugin Interface Preview](src/main/resources/image/help.png)
 
 ## Features
 
-- 🚀 **Batch Git Clone**: Support pulling multiple Git repositories at once
-- ⚙️ **Automated Configuration**: Automatically generate or modify configuration files required by the BOS platform
-- 📊 **Visual Interface**: Intuitive graphical interface that displays progress and logs in real-time
-- ⏱️ **Timeout Control**: Set maximum wait time for individual repository pulls
-- 🧹 **Cleanup Option**: Support clearing existing project directories before initialization
-- 🛑 **Interruptible Operations**: Support canceling ongoing tasks at any time
+- **Batch Cloning**: Support multiple repositories (HTTP/HTTPS/SSH)
+- **Auto Configuration**: Auto-generate and sync config.gradle, settings.gradle, build_local.gradle
+- **Visualization**: Real-time progress display, color-coded log output
+- **Timeout Control**: Independent repository timeout settings
+- **Cleanup Option**: Clear target directory before initialization
+- **Interruptible**: Pause/cancel tasks at any time
 
-## How to Use
+## Quick Start
 
-1. Open the plugin in IntelliJ IDEA
-2. Launch the plugin via menu `Tools -> BOS Project Initialization Assistant`
-3. Configure the following parameters:
-   - Select the BOS start project root directory
-   - Enter the list of Git repository URLs to pull (one per line)
-   - Set timeout (optional, default 60 seconds)
-   - Choose whether to clear existing projects (optional)
-4. Click the "Initialize" button to start execution
+### Installation
 
-## Prerequisites
+1. `Settings` → `Plugins` → `⚙️` → `Install Plugin from Disk...`
+2. Select the downloaded JAR file
+3. Restart IDEA
 
-- Git CLI is installed and available in `PATH`
-- Target directory has read/write permissions
-- Network access to remote repositories (HTTP/HTTPS/SSH)
-- Git URLs are validated and sanitized (see `SecurityUtils` / `GitUtils`); invalid input will be rejected
+### Usage
+
+1. Menu: `Tools → BOS Project Initialization Assistant`
+2. Configure parameters: project path, Git repository URLs, timeout
+3. Click `Initialize` to execute
+
+## Configuration
+
+| Parameter | Description | Required |
+|-----------|-------------|----------|
+| Project Path | BOS project root directory (contains projects subdirectory) | ✅ |
+| Timeout | Clone timeout per repository (seconds), default 60 | ❌ |
+| Git Repository URLs | Repository URLs to clone, one per line | ✅ |
+| Clear Option | Clear target directory before initialization | ❌ |
 
 ## Project Structure
 
 ```
-.
-├── src/main/kotlin/com/songwh/bosprojectinit/
-│   ├── actions/                 # IDEA action entry
-│   │   └── ProjectInitAction.kt # Plugin main entry action
-│   ├── logic/                   # Core business logic
-│   │   ├── steps/               # Initialization step definitions
-│   │   │   ├── impl/            # Specific step implementations
-│   │   │   │   ├── CloneStep.kt           # Repository cloning step
-│   │   │   │   ├── ConfigGradleStep.kt    # config.gradle synchronization step
-│   │   │   │   ├── SettingsStep.kt        # settings.gradle configuration step
-│   │   │   │   ├── BuildLocalStep.kt      # Root build_local.gradle generation step
-│   │   │   │   └── ModuleBuildLocalStep.kt # Module build_local.gradle generation step
-│   │   │   └── IProjectInitStep.kt        # Step interface definition
-│   │   └── ProjectInitializer.kt          # Project initializer core class
-│   ├── model/                             # Data models
-│   │   └── InitializationModels.kt        # Various data model definitions
-│   ├── ui/                                # User interface
-│   │   ├── components/                    # UI components
-│   │   ├── ProjectInitDialog.kt           # Initialization dialog container
-│   │   ├── ProjectInitView.kt             # Initialization main view
-│   │   └── Typography.kt                  # Font style definitions
-│   ├── utils/                             # Utility classes
-│   │   └── GitUtils.kt                    # Git operation utility class
-│   ├── BosProjectInitTool.kt              # Tool window implementation
-│   └── MessageBundle.kt                   # Internationalization message bundle
-│
+bos-project-init/
+├── src/main/kotlin/
+│   ├── actions/           # Plugin entry
+│   ├── logic/             # Core business logic
+│   │   └── steps/         # Initialization steps
+│   ├── model/             # Data models
+│   ├── settings/          # Plugin settings
+│   ├── ui/                # User interface
+│   │   └── components/    # UI components
+│   └── utils/             # Utilities
 ├── src/main/resources/
-│   ├── messages/                          # Multilingual resource files
-│   │   ├── MessageBundle.properties       # Default language pack (Chinese)
-│   │   ├── MessageBundle_en_US.properties # English language pack
-│   │   └── MessageBundle_zh_CN.properties # Chinese language pack
-│   ├── image/                             # Image resources
-│   │   └── help.png                       # Help image
-│   └── META-INF/
-│       └── plugin.xml                     # Plugin configuration file
-│
-├── build.gradle.kts                       # Gradle build script
-├── settings.gradle.kts                    # Gradle settings file
-└── gradle.properties                      # Gradle property configuration
+│   ├── messages/          # Multilingual resources
+│   ├── image/             # Image resources
+│   └── META-INF/          # Plugin configuration
+├── src/test/kotlin/       # Test code
+├── build.gradle.kts       # Gradle build script
+└── README.md              # Project documentation
 ```
 
-## Core Workflow
+## Workflow
 
-1. **Code Cloning**: Batch clone to the specified projects directory based on Git URLs provided by the user
-2. **Configuration Sync**: Synchronize config.gradle configuration file
-3. **Settings Configuration**: Generate or update settings.gradle file to include all modules
-4. **Build Configuration**: Generate build_local.gradle file for the root project
-5. **Module Configuration**: Generate corresponding build_local.gradle files for each submodule
+1. **Environment Check**: Verify Git installation and directory permissions
+2. **Parameter Validation**: Validate Git URL format and paths
+3. **Cleanup Directory**: Optionally clear target directory
+4. **Clone Repositories**: Clone multiple repositories to projects directory
+5. **Configuration Sync**: Auto-generate config.gradle, settings.gradle, build_local.gradle
+6. **Results Summary**: Output execution report
 
-Notes:
+## Common Issues
 
-- CloneStep uses concurrent cloning with a limit of 3 repositories at a time (adjustable in code)
-- Per-repository timeout strictly follows the `timeoutSeconds` value from the UI
+**Git Not Found**
+- Confirm Git is installed and added to system PATH
+- Restart IDEA
+
+**Permission Denied**
+- Check target directory permissions
+- Ensure current user has read/write permissions
+
+**Network Timeout**
+- Increase timeout (120-300 seconds)
+- Check network connection
+- Confirm repository URL and access permissions
+
+**URL Validation Failed**
+- Ensure URL format is correct (supports https://, http://, git@)
+- Check for illegal characters in URL
+
+**SSH Authentication Failed**
+- Ensure SSH key is added to Git server
+- Or use HTTPS protocol
+
+**Module Not Recognized**
+- Manually refresh Gradle project
+- Run `./gradlew projects` to check modules
 
 ## Development Environment
 
-- IntelliJ IDEA 2025.2.4 or higher
-- JDK 21
-- Kotlin 2.1.20
-- Gradle 8.x
-
-## Build and Run
-
-```bash
-# Build plugin
-./gradlew buildPlugin
-
-# Run plugin for testing
-./gradlew runIde
-```
+| Component | Requirement |
+|-----------|-------------|
+| IntelliJ IDEA | 2025.2.4+ |
+| JDK | 21+ |
+| Kotlin | 2.1.20 |
+| Gradle | 8.x |
 
 ## Tech Stack
 
 - Kotlin
 - Compose UI for IntelliJ
-- Coroutines
-- Git command-line tools
+- Kotlin Coroutines
+- Git CLI
+- IntelliJ Platform SDK
 
-## Notes
-
-- Ensure Git command-line tools are installed and added to the PATH environment variable
-- The plugin needs network access to clone remote repositories
-- The plugin needs read/write permissions to the target directory
