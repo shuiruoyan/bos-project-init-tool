@@ -32,8 +32,14 @@ jobs:
       - name: Build Plugin
         run: ./gradlew buildPlugin
 
+      - name: Get Plugin Version
+        id: version
+        run: |
+          VERSION=$(grep '^version' build.gradle.kts | sed -E 's/^version[[:space:]]*=[[:space:]]*"([^"]*)".*/\1/')
+          echo "VERSION=${VERSION}" >> "$GITHUB_OUTPUT"
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: plugin-artifact
+          name: bos-project-init-tool-${{ steps.version.outputs.VERSION }}
           path: build/distributions/bos-project-init-tool-*.zip

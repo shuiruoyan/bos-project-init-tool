@@ -8,7 +8,7 @@ plugins {
 }
 
 group = "com.songwh"
-version = "1.1.2"
+version = "1.1.3"
 
 repositories {
     mavenCentral()
@@ -40,7 +40,13 @@ intellijPlatform {
         }
 
         changeNotes = """
-            Initial version
+            <h3>v1.1.3</h3>
+            <ul>
+                <li>Add MIT open source license</li>
+                <li>Fix: Git URL input scrolls to follow the caret on Backspace at the last line</li>
+                <li>CI artifact now named with project name and version</li>
+                <li>Optimized project files and build configuration</li>
+            </ul>
         """.trimIndent()
     }
 }

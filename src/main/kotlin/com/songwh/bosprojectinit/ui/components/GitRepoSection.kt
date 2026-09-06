@@ -16,11 +16,19 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import com.songwh.bosprojectinit.MessageBundle
 import com.songwh.bosprojectinit.ui.Typography
@@ -110,6 +118,44 @@ object GitRepoSection {
         }
 
         val gitUrlsScrollState = rememberScrollState()
+
+        // 内部持有带选区信息的文本状态，用于获取光标位置
+        var tfValue by remember { mutableStateOf(TextFieldValue(gitUrls)) }
+        // 外部文本变化（如"删除并继续"清理无效 URL）时同步进来；
+        // 正常输入过程中 text 一致，不做处理，避免丢失光标/选区位置
+        LaunchedEffect(gitUrls) {
+            if (gitUrls != tfValue.text) {
+                tfValue = TextFieldValue(gitUrls)
+            }
+        }
+
+        // 最近一次文本布局结果，用于计算光标位置
+        var textLayoutResult by remember { mutableStateOf<TextLayoutResult?>(null) }
+        // 输入区实际大小（像素），用于判断光标是否超出可视区域
+        var fieldSize by remember { mutableStateOf(IntSize.Zero) }
+
+        // 光标/选区变化时，将滚动位置对齐到光标所在行，保证输入时界面跟随光标
+        LaunchedEffect(tfValue.selection, textLayoutResult, gitUrlsScrollState.maxValue) {
+            val layout = textLayoutResult ?: return@LaunchedEffect
+            val cursorRect = layout.getCursorRect(tfValue.selection.start)
+            val maxScroll = gitUrlsScrollState.maxValue
+            val viewportHeight = fieldSize.height.toFloat()
+            if (viewportHeight <= 0f) return@LaunchedEffect
+
+            val current = gitUrlsScrollState.value
+            val visibleTop = current
+            val visibleBottom = current + viewportHeight
+
+            val scrollTarget = when {
+                // 光标位于可视区上方：向上滚动到光标处
+                cursorRect.top < visibleTop -> (cursorRect.top - 4f).coerceAtLeast(0f)
+                // 光标位于可视区下方（如最后一行退格后仍停留在原行下方，或删除后光标位置改变）：向下滚动到光标处
+                cursorRect.bottom > visibleBottom -> (cursorRect.bottom - viewportHeight + 4f).coerceAtLeast(0f)
+                else -> return@LaunchedEffect
+            }
+            gitUrlsScrollState.scrollTo(scrollTarget.toInt().coerceAtMost(maxScroll))
+        }
+
         Box(
             modifier = modifier
                 .fillMaxWidth()
@@ -119,18 +165,21 @@ object GitRepoSection {
         ) {
             // 使用 BasicTextField 以便获得更灵活的定制外观
             BasicTextField(
-                value = gitUrls,
-                onValueChange = { 
-                    // 不再实时过滤，保留用户输入的所有内容
-                    onGitUrlsChange(it)
+                value = tfValue,
+                onValueChange = { newValue ->
+                    // 不再实时过滤，保留用户输入的所有内容；同时保留选区以跟踪光标
+                    tfValue = newValue
+                    onGitUrlsChange(newValue.text)
                 },
                 modifier = Modifier
                     .fillMaxWidth()
                     .fillMaxHeight()
                     .padding(8.dp)
                     .padding(end = 12.dp) // 为右侧滚动条预留空间
+                    .onSizeChanged { fieldSize = it }
                     .verticalScroll(gitUrlsScrollState),
                 enabled = enabled,
+                onTextLayout = { textLayoutResult = it },
                 textStyle = TextStyle(color = textColor, fontSize = Typography.defaultFontSize)
             )
             // 手动添加垂直滚动条，因为 BasicTextField 默认不带滚动条 UI
