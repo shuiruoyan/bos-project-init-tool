@@ -1,6 +1,5 @@
 # BOS Project Initialization Assistant
 
-[![Version](https://img.shields.io/badge/Version-1.0.0-blue)](CHANGELOG.md)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![IntelliJ IDEA](https://img.shields.io/badge/IntelliJ_IDEA-2025.2.4+-orange)](https://www.jetbrains.com/idea/)
 
