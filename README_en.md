@@ -1,6 +1,7 @@
 # BOS Project Initialization Assistant
 
 [![Version](https://img.shields.io/badge/Version-1.0.0-blue)](CHANGELOG.md)
+[![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![IntelliJ IDEA](https://img.shields.io/badge/IntelliJ_IDEA-2025.2.4+-orange)](https://www.jetbrains.com/idea/)
 
 [(中文说明)](README.md) | [Architecture](ARCHITECTURE.md)
@@ -117,4 +118,8 @@ bos-project-init/
 - Kotlin Coroutines
 - Git CLI
 - IntelliJ Platform SDK
+
+## License
+
+This project is licensed under the [MIT License](LICENSE), Copyright (c) 2026 songwh.
 

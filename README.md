@@ -1,6 +1,7 @@
 # 苍穹工程初始化助手
 
 [![Version](https://img.shields.io/badge/Version-1.0.0-blue)](CHANGELOG.md)
+[![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![IntelliJ IDEA](https://img.shields.io/badge/IntelliJ_IDEA-2025.2.4+-orange)](https://www.jetbrains.com/idea/)
 
 [English](README_en.md) | [架构文档](ARCHITECTURE.md)
@@ -119,3 +120,7 @@ bos-project-init/
 - Kotlin Coroutines
 - Git CLI
 - IntelliJ Platform SDK
+
+## 开源协议
+
+本项目采用 [MIT License](LICENSE) 开源协议，署名 songwh。
