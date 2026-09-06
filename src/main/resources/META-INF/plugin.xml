@@ -1,5 +1,7 @@
 <!-- Plugin Configuration File: https://plugins.jetbrains.com/docs/intellij/plugin-configuration-file.html -->
-<idea-plugin>
+<!-- require-restart: 插件 UI 基于 Compose/Skia 原生库（Skiko），classloader 无法安全动态卸载，
+     故强制要求重启后生效。官方文档：使用原生库的插件应声明 require-restart="true"。 -->
+<idea-plugin require-restart="true">
     <!-- Unique identifier of the plugin. It should be FQN, cannot be changed between the plugin versions. -->
     <id>com.songwh.bos-project-init</id>
 

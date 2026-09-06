@@ -41,5 +41,5 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: bos-project-init-tool-${{ steps.version.outputs.VERSION }}
+          name: artifact-bos-project-init-tool-${{ steps.version.outputs.VERSION }}
           path: build/distributions/bos-project-init-tool-*.zip
