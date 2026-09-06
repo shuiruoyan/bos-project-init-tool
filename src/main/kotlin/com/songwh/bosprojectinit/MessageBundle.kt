@@ -1,9 +1,10 @@
 package com.songwh.bosprojectinit
 
-import com.intellij.DynamicBundle
 import com.songwh.bosprojectinit.settings.PluginSettings
 import org.jetbrains.annotations.Nls
 import org.jetbrains.annotations.PropertyKey
+import java.io.InputStreamReader
+import java.nio.charset.StandardCharsets
 import java.text.MessageFormat
 import java.util.*
 import java.util.function.Supplier
@@ -12,7 +13,7 @@ private const val BUNDLE = "messages.MessageBundle"
 
 /**
  * 国际化资源管理对象
- * 封装了 IntelliJ 平台的 DynamicBundle，用于加载和获取多语言文案。
+ * 基于标准 ResourceBundle 加载和获取多语言文案（通过 Utf8Control 以 UTF-8 读取资源文件）。
  * 资源文件位于 resources/messages/MessageBundle.properties (及对应的 _zh_CN, _en_US 版本)
  */
 internal object MessageBundle {
@@ -49,10 +50,37 @@ internal object MessageBundle {
         // 如果语言变化了，重新加载资源束
         if (bundle == null || currentLocale != locale) {
             currentLocale = locale
-            bundle = ResourceBundle.getBundle(BUNDLE, locale, MessageBundle::class.java.classLoader)
+            bundle = ResourceBundle.getBundle(BUNDLE, locale, MessageBundle::class.java.classLoader, Utf8Control)
         }
         
         return bundle!!
+    }
+
+    /**
+     * 以 UTF-8 编码读取 properties 资源文件。
+     * 标准 ResourceBundle 默认按 ISO-8859-1 解码，无法读取直接存储的 UTF-8 中文；
+     * 这里通过自定义 Control 改用 UTF-8 读取，使资源文件可以直接书写中文字符。
+     */
+    private object Utf8Control : ResourceBundle.Control() {
+        override fun newBundle(
+            baseName: String,
+            locale: Locale,
+            format: String,
+            loader: ClassLoader,
+            reload: Boolean
+        ): ResourceBundle? {
+            if (format != "java.properties") {
+                return super.newBundle(baseName, locale, format, loader, reload)
+            }
+            val bundleName = toBundleName(baseName, locale)
+            val resourceName = toResourceName(bundleName, "properties")
+            val stream = loader.getResourceAsStream(resourceName) ?: return null
+            return try {
+                PropertyResourceBundle(InputStreamReader(stream, StandardCharsets.UTF_8))
+            } finally {
+                stream.close()
+            }
+        }
     }
 
     /**

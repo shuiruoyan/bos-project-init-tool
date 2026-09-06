@@ -5,6 +5,18 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.4] - 2026-09-06
+
+### Changed
+
+- `MessageBundle` resource files are now stored as UTF-8, so Chinese characters appear directly in the `.properties` files instead of `\uXXXX` escapes
+- Added a custom `ResourceBundle.Control` (`Utf8Control`) so the bundle is read as UTF-8 at runtime
+- Bumped version to 1.1.4
+
+### Fixed
+
+- IntelliJ displayed `MessageBundle_zh_CN.properties` Chinese text as unicode escape sequences; it now shows the actual Chinese characters
+
 ## [1.1.3] - 2026-09-06
 
 ### Fixed

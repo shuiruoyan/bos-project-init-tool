@@ -4,7 +4,7 @@
 
 An **IntelliJ IDEA plugin** for Kingdee BOS (Business Operation System) platform developers. It automates initializing multi-repository Gradle workspaces by batch-cloning Git repos and generating Gradle configuration files (`settings.gradle`, `build_local.gradle`, per-module `build_local.gradle`, `config.gradle`).
 
-Requires: IntelliJ IDEA 2025.2.4+ (`sinceBuild 252.25557`), JDK 21, Git CLI in PATH. Toolchain: Kotlin 2.1.20, Gradle wrapper 9.0.0, `org.jetbrains.intellij.platform` 2.10.2. Current plugin version: 1.1.3.
+Requires: IntelliJ IDEA 2025.2.4+ (`sinceBuild 252.25557`), JDK 21, Git CLI in PATH. Toolchain: Kotlin 2.1.20, Gradle wrapper 9.0.0, `org.jetbrains.intellij.platform` 2.10.2. Current plugin version: 1.1.4.
 
 ## Commands
 

@@ -8,7 +8,7 @@ plugins {
 }
 
 group = "com.songwh"
-version = "1.1.3"
+version = "1.1.4"
 
 repositories {
     mavenCentral()
@@ -40,6 +40,11 @@ intellijPlatform {
         }
 
         changeNotes = """
+            <h3>v1.1.4</h3>
+            <ul>
+                <li>MessageBundle resource files now stored as UTF-8, so Chinese characters appear directly in the .properties files</li>
+                <li>Fix: IntelliJ displayed zh_CN properties Chinese text as unicode escape sequences</li>
+            </ul>
             <h3>v1.1.3</h3>
             <ul>
                 <li>Add MIT open source license</li>
